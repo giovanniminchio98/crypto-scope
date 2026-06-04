@@ -129,10 +129,11 @@
 
 <div class="toast" id="toast"></div>
 
-<!-- CoinGecko Demo API key — raises rate limits for the live feed.
-     Note: this key is visible in the page source on a public deploy; rotate it
-     at coingecko.com if it ever gets abused. -->
-<script>window.CRYPTOSCOPE_CONFIG = { apiKey: 'CG-q9H92pU2KJ6DMcwnVLTuBm31' };</script>
+<!-- API access. The CoinGecko key is kept server-side by the Cloudflare Worker
+     proxy in /worker (see worker/README.md). After you deploy it, uncomment the
+     line below and drop in your Worker URL — the browser then never sees the key.
+     Until then, the app falls back to CoinGecko's anonymous (rate-limited) tier. -->
+<!-- <script>window.CRYPTOSCOPE_CONFIG = { apiBase: 'https://cryptoscope-proxy.YOUR-SUBDOMAIN.workers.dev' };</script> -->
 <script src="oracle.js" defer></script>
 <script src="app.js" defer></script>
 </body>

@@ -1,0 +1,11 @@
+name = "cryptoscope-proxy"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# The CoinGecko key is NOT stored here. Set it as an encrypted secret:
+#   wrangler secret put CG_API_KEY
+#
+# Optional: lock the proxy to your deployed site's origin so others can't use
+# your key's quota. Uncomment and set to your real URL once you know it.
+# [vars]
+# ALLOWED_ORIGIN = "https://your-site.pages.dev"
