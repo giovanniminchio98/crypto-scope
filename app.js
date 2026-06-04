@@ -222,11 +222,7 @@ async function boot() {
 
   setLive('syncing', 'Connecting…');
   try {
-    coins = await cachedJSON(
-      'markets',
-      `${API}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`,
-      MARKETS_TTL
-    );
+    coins = await cachedJSON('markets', MARKETS_URL, MARKETS_TTL);
     if (!Array.isArray(coins) || !coins.length) throw new Error('No market data');
     document.getElementById('coinSelect').innerHTML = coins.map(c =>
       `<option value="${c.id}">${c.symbol.toUpperCase()} — ${c.name}</option>`
@@ -287,13 +283,21 @@ async function fetchOHLC(coinId, tf, { fresh = false } = {}) {
   return raw.map(d => ({ t:+d[0], o:+d[1], h:+d[2], l:+d[3], c:+d[4] }));
 }
 
-/* ─── Fetch a single coin's latest market data (cheap live price refresh) ────── */
-async function fetchCoinMarket(coinId) {
-  const arr = await fetchJSON(
-    `${API}/coins/markets?vs_currency=usd&ids=${coinId}&price_change_percentage=24h`,
-    { tries: 2, timeout: 7000 }
-  );
-  return Array.isArray(arr) && arr[0] ? arr[0] : null;
+/* ─── Refresh the top-20 markets snapshot (one call covers every coin) ───────────
+ * Cached, so flipping between coins within the TTL reuses a single response
+ * instead of firing a new request per coin — this is the main rate-limit saver.
+ * Pass force:true (the Refresh button) to bust the cache and pull live prices. */
+const MARKETS_URL =
+  `${API}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`;
+
+async function refreshMarkets(force = false) {
+  if (force) cache.delete('markets');
+  const arr = await cachedJSON('markets', MARKETS_URL, MARKETS_TTL);
+  if (Array.isArray(arr)) {
+    const byId = new Map(arr.map(c => [c.id, c]));
+    coins = coins.map(c => byId.get(c.id) || c);  // merge fresh data, keep dropdown order
+  }
+  return arr;
 }
 
 /* ─── EMA (for chart overlay lines only — Oracle computes its own) ──────────── */
@@ -485,19 +489,22 @@ const sc   = v => v > 0.15 ? 'bull' : v < -0.15 ? 'bear' : 'neutral';
 function scoreColor(s) { return `hsl(${Math.round(s*1.2)}, 65%, 55%)`; } // 0=red → 100=green
 
 function gaugeSVG(score, color) {
-  const cx=110, cy=112, r=92;
-  const a = (180 - score*1.8) * Math.PI/180;
-  const nx = cx + (r-14)*Math.cos(a), ny = cy - (r-14)*Math.sin(a);
+  const cx=110, cy=110, r=90;
+  const a = (180 - score*1.8) * Math.PI/180;       // value angle along the arc
+  const dotx = cx + r*Math.cos(a), doty = cy - r*Math.sin(a);
   const track = `M ${cx-r} ${cy} A ${r} ${r} 0 0 0 ${cx+r} ${cy}`;
   return `
-  <svg class="gauge" viewBox="0 0 220 128" width="100%" height="100%">
-    <path d="${track}" pathLength="100" fill="none" stroke="#2a2a2a" stroke-width="14" stroke-linecap="round"/>
-    <path d="${track}" pathLength="100" fill="none" stroke="${color}" stroke-width="14" stroke-linecap="round"
+  <svg class="gauge" viewBox="0 0 220 134" width="100%" height="100%">
+    <path d="${track}" pathLength="100" fill="none" stroke="#262626" stroke-width="13" stroke-linecap="round"/>
+    <path d="${track}" pathLength="100" fill="none" stroke="${color}" stroke-width="13" stroke-linecap="round"
           stroke-dasharray="${score} 100"/>
-    <line x1="${cx}" y1="${cy}" x2="${nx}" y2="${ny}" stroke="${color}" stroke-width="3" stroke-linecap="round"/>
-    <circle cx="${cx}" cy="${cy}" r="6" fill="${color}"/>
-    <text x="20" y="124" fill="#555" font-size="9" font-family="DM Mono">BEAR</text>
-    <text x="200" y="124" fill="#555" font-size="9" font-family="DM Mono" text-anchor="end">BULL</text>
+    <circle cx="${dotx}" cy="${doty}" r="7" fill="#0e0e0e" stroke="${color}" stroke-width="3"/>
+    <text x="110" y="93" text-anchor="middle" fill="${color}"
+          font-family="'DM Serif Display', serif" font-style="italic" font-size="46">${score}</text>
+    <text x="110" y="111" text-anchor="middle" fill="#666"
+          font-family="'DM Mono', monospace" font-size="10" letter-spacing="1.5">/ 100</text>
+    <text x="14"  y="130" fill="#555" font-size="9" font-family="'DM Mono', monospace">BEAR</text>
+    <text x="206" y="130" fill="#555" font-size="9" font-family="'DM Mono', monospace" text-anchor="end">BULL</text>
   </svg>`;
 }
 
@@ -557,9 +564,7 @@ function renderOracle(res) {
     <!-- VERDICT -->
     <div class="ocard verdict">
       <div class="ocard-title">Oracle Verdict</div>
-      <div class="gauge-wrap">${gaugeSVG(C.score, col)}
-        <div class="gauge-num" style="color:${col}">${C.score}</div>
-      </div>
+      <div class="gauge-wrap">${gaugeSVG(C.score, col)}</div>
       <div class="verdict-label" style="color:${col}">${C.label}</div>
       <div class="verdict-conf">Confidence <strong>${C.confidence}%</strong> · ${res.meta.bars} candles</div>
       <div class="verdict-regime">${res.regime.label}</div>
@@ -714,28 +719,40 @@ async function loadChart({ force = false } = {}) {
   document.getElementById('tfLabel').innerHTML =
     `Timeframe <strong>${TF_LABELS[currentTF]}</strong>`;
 
-  let data, market;
-  try {
-    // Always pull a fresh market snapshot for the selected coin so switching
-    // back to a coin never shows a stale price; candles use cache unless forced.
-    [data, market] = await Promise.all([
-      fetchOHLC(coinId, currentTF, { fresh: force }),
-      fetchCoinMarket(coinId).catch(() => null),
-    ]);
-  } catch (e) {
-    if (myReq !== reqId) return;
-    console.error('OHLC fetch failed:', e);
-    showError(e.rateLimited
-      ? 'CoinGecko rate limit hit. Wait a moment, then retry.'
-      : 'Couldn’t load chart data for this coin. Retry?');
-    return;
-  }
-
+  // Candles are required; the market snapshot (price/stats) is best-effort so a
+  // price-only failure never blanks the chart. One shared markets call updates
+  // every coin's price, which keeps us well under the rate limit.
+  let data;
+  const [ohlcRes, mktRes] = await Promise.allSettled([
+    fetchOHLC(coinId, currentTF, { fresh: force }),
+    refreshMarkets(force),
+  ]);
   if (myReq !== reqId) return;
 
+  if (ohlcRes.status === 'rejected') {
+    const e = ohlcRes.reason || {};
+    console.error('OHLC fetch failed:', e);
+    if (ohlcData.length) {
+      // We already have something on screen — keep it rather than going blank.
+      clearLoading();
+      setLive('stale', 'Price update failed');
+      toast(e.rateLimited ? 'Rate limited — showing last data.' : 'Update failed — showing last data.');
+      startAutoRefresh();
+    } else {
+      showError(e.rateLimited
+        ? 'CoinGecko rate limit hit. Wait a few seconds, then Retry.'
+        : 'Couldn’t load chart data for this coin. Retry?');
+    }
+    return;
+  }
+  data = ohlcRes.value;
+
   ohlcData = data;
-  if (market && coin) Object.assign(coin, market);
-  if (coin) refreshBar(coin, false);
+  const freshCoin = coins.find(c => c.id === coinId);  // refreshMarkets may have updated this
+  if (freshCoin) refreshBar(freshCoin, false);
+  else if (coin) refreshBar(coin, false);
+  if (mktRes.status === 'rejected' && mktRes.reason && mktRes.reason.rateLimited)
+    toast('Price feed rate limited — chart is current, price may lag.');
 
   sizeCanvas();
   analyzeAndRender();
@@ -755,15 +772,14 @@ async function refreshLive() {
   const myReq = reqId;
   setLive('syncing', 'Updating…');
   try {
-    const [data, market] = await Promise.all([
+    const [data] = await Promise.all([
       fetchOHLC(coinId, currentTF, { fresh: true }),
-      fetchCoinMarket(coinId).catch(() => null)
+      refreshMarkets(true).catch(() => null)   // best-effort price; never breaks the refresh
     ]);
     if (myReq !== reqId) return;
 
     ohlcData = data;
     const coin = coins.find(c => c.id === coinId);
-    if (market && coin) Object.assign(coin, market);
     if (coin) refreshBar(coin, false);
 
     analyzeAndRender();

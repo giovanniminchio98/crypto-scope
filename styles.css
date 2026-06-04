@@ -283,12 +283,8 @@ canvas { display: block; width: 100%; height: 100%; }
 
 /* Verdict / gauge */
 .verdict { text-align: center; }
-.gauge-wrap { position: relative; max-width: 260px; margin: 0 auto; }
+.gauge-wrap { max-width: 250px; margin: 0 auto; }
 .gauge { display: block; }
-.gauge-num {
-  position: absolute; left: 0; right: 0; bottom: 6px;
-  font-family: 'DM Serif Display', serif; font-size: 40px; font-style: italic; line-height: 1;
-}
 .verdict-label { font-family: 'DM Serif Display', serif; font-style: italic; font-size: 24px; margin-top: 6px; }
 .verdict-conf { font-size: 11px; color: var(--muted); margin-top: 6px; }
 .verdict-conf strong { color: var(--text); }
