@@ -495,17 +495,33 @@ function gaugeSVG(score, color) {
   const track = `M ${cx-r} ${cy} A ${r} ${r} 0 0 0 ${cx+r} ${cy}`;
   return `
   <svg class="gauge" viewBox="0 0 220 134" width="100%" height="100%">
-    <path d="${track}" pathLength="100" fill="none" stroke="#262626" stroke-width="13" stroke-linecap="round"/>
-    <path d="${track}" pathLength="100" fill="none" stroke="${color}" stroke-width="13" stroke-linecap="round"
-          stroke-dasharray="${score} 100"/>
-    <circle cx="${dotx}" cy="${doty}" r="7" fill="#0e0e0e" stroke="${color}" stroke-width="3"/>
+    <defs>
+      <linearGradient id="gaugeGrad" x1="${cx-r}" y1="0" x2="${cx+r}" y2="0" gradientUnits="userSpaceOnUse">
+        <stop offset="0%"   stop-color="#ff5b5b"/>
+        <stop offset="25%"  stop-color="#ff8a5b"/>
+        <stop offset="50%"  stop-color="#f0b860"/>
+        <stop offset="75%"  stop-color="#c8e85f"/>
+        <stop offset="100%" stop-color="#9be65f"/>
+      </linearGradient>
+    </defs>
+    <!-- full gradient arc: red → orange → green across the whole sweep -->
+    <path d="${track}" fill="none" stroke="url(#gaugeGrad)" stroke-width="13" stroke-linecap="round"/>
+    <!-- value marker dot riding on the arc -->
+    <circle cx="${dotx}" cy="${doty}" r="9" fill="#0e0e0e"/>
+    <circle cx="${dotx}" cy="${doty}" r="7" fill="${color}"/>
+    <circle cx="${dotx}" cy="${doty}" r="2.5" fill="#0e0e0e"/>
     <text x="110" y="93" text-anchor="middle" fill="${color}"
           font-family="'DM Serif Display', serif" font-style="italic" font-size="46">${score}</text>
     <text x="110" y="111" text-anchor="middle" fill="#666"
           font-family="'DM Mono', monospace" font-size="10" letter-spacing="1.5">/ 100</text>
-    <text x="14"  y="130" fill="#555" font-size="9" font-family="'DM Mono', monospace">BEAR</text>
-    <text x="206" y="130" fill="#555" font-size="9" font-family="'DM Mono', monospace" text-anchor="end">BULL</text>
+    <text x="14"  y="130" fill="#ff7a6b" font-size="9" font-family="'DM Mono', monospace">BEAR</text>
+    <text x="206" y="130" fill="#a8e060" font-size="9" font-family="'DM Mono', monospace" text-anchor="end">BULL</text>
   </svg>`;
+}
+
+/* Two-line caption under each card: what it shows + what it means. */
+function odesc(what, mean) {
+  return `<div class="ocard-desc"><span><i>Shows</i>${what}</span><span><i>Means</i>${mean}</span></div>`;
 }
 
 function probBar(p, dir) {
@@ -564,6 +580,7 @@ function renderOracle(res) {
     <!-- VERDICT -->
     <div class="ocard verdict">
       <div class="ocard-title">Oracle Verdict</div>
+      ${odesc('All signals fused into one score, 0–100.', '50 = neutral · higher = stronger bullish odds.')}
       <div class="gauge-wrap">${gaugeSVG(C.score, col)}</div>
       <div class="verdict-label" style="color:${col}">${C.label}</div>
       <div class="verdict-conf">Confidence <strong>${C.confidence}%</strong> · ${res.meta.bars} candles</div>
@@ -573,6 +590,7 @@ function renderOracle(res) {
     <!-- PROBABILITIES -->
     <div class="ocard">
       <div class="ocard-title">Forecast Probabilities <span class="ttag">${res.meta.horizon} bars · ${res.mc.paths.toLocaleString()} sims</span></div>
+      ${odesc('Thousands of simulated future price paths.', 'Odds & size of the move over the next horizon.')}
       <div class="prob-head">
         <div class="prob-big ${P.pUp>=0.5?'bull':'bear'}">${pctP(P.pUp)}<small>chance up</small></div>
         <div class="prob-big ${P.pUp<0.5?'bear':'neutral'}">${pctP(1-P.pUp)}<small>chance down</small></div>
@@ -588,12 +606,14 @@ function renderOracle(res) {
     <!-- SIGNAL MATRIX -->
     <div class="ocard wide">
       <div class="ocard-title">Signal Matrix <span class="ttag">8 weighted factors fused into the verdict</span></div>
+      ${odesc('Eight indicators each scored −100 … +100.', 'Green leans bullish, red bearish; together they set the verdict.')}
       <div class="sig-list">${res.signals.map(signalRow).join('')}</div>
     </div>
 
     <!-- RISK -->
     <div class="ocard">
       <div class="ocard-title">Risk Profile</div>
+      ${odesc('How violent this asset’s moves are right now.', 'Higher volatility, VaR & drawdown = bigger swings and losses.')}
       <div class="metric-grid">
         ${metric('Volatility (ann.)', pctP(V.annVol,0))}
         ${metric('ATR', V.atrPct!=null?V.atrPct.toFixed(2)+'%':'—')}
@@ -609,6 +629,7 @@ function renderOracle(res) {
     <!-- STATISTICAL FINGERPRINT -->
     <div class="ocard">
       <div class="ocard-title">Statistical Fingerprint</div>
+      ${odesc('The shape & memory of this coin’s returns.', 'Hurst >0.5 trends, <0.5 mean-reverts; fat tails = crash risk.')}
       <div class="metric-grid">
         ${metric('Hurst exponent', S.hurst.toFixed(3))}
         ${metric('Trend slope', `${hSlope>=0?'+':''}${hSlope.toFixed(3)}%/bar`, hSlope>=0?'bull':'bear')}
@@ -624,6 +645,7 @@ function renderOracle(res) {
     <!-- DISTRIBUTION -->
     <div class="ocard wide">
       <div class="ocard-title">Projected Price Distribution <span class="ttag">terminal outcomes at horizon</span></div>
+      ${odesc('Where the simulated prices land at the horizon.', 'Wider spread = more uncertainty; dashed line = price now.')}
       <div class="dist-wrap"><canvas id="distCv"></canvas></div>
       <div class="dist-legend">
         <span><i style="background:var(--bull)"></i>upside</span>
