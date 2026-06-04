@@ -489,33 +489,32 @@ const sc   = v => v > 0.15 ? 'bull' : v < -0.15 ? 'bear' : 'neutral';
 function scoreColor(s) { return `hsl(${Math.round(s*1.2)}, 65%, 55%)`; } // 0=red → 100=green
 
 function gaugeSVG(score, color) {
-  const cx=110, cy=110, r=90;
-  const a = (180 - score*1.8) * Math.PI/180;       // value angle along the arc
-  const dotx = cx + r*Math.cos(a), doty = cy - r*Math.sin(a);
+  const cx=110, cy=104, r=88;
   const track = `M ${cx-r} ${cy} A ${r} ${r} 0 0 0 ${cx+r} ${cy}`;
   return `
-  <svg class="gauge" viewBox="0 0 220 134" width="100%" height="100%">
+  <svg class="gauge" viewBox="0 0 220 140" width="100%" height="100%">
     <defs>
       <linearGradient id="gaugeGrad" x1="${cx-r}" y1="0" x2="${cx+r}" y2="0" gradientUnits="userSpaceOnUse">
-        <stop offset="0%"   stop-color="#ff5b5b"/>
-        <stop offset="25%"  stop-color="#ff8a5b"/>
-        <stop offset="50%"  stop-color="#f0b860"/>
-        <stop offset="75%"  stop-color="#c8e85f"/>
-        <stop offset="100%" stop-color="#9be65f"/>
+        <stop offset="0%"   stop-color="#ff4d4d"/>
+        <stop offset="30%"  stop-color="#ff8a3d"/>
+        <stop offset="55%"  stop-color="#f0b860"/>
+        <stop offset="78%"  stop-color="#bfe34f"/>
+        <stop offset="100%" stop-color="#79e04a"/>
       </linearGradient>
     </defs>
-    <!-- full gradient arc: red → orange → green across the whole sweep -->
-    <path d="${track}" fill="none" stroke="url(#gaugeGrad)" stroke-width="13" stroke-linecap="round"/>
-    <!-- value marker dot riding on the arc -->
-    <circle cx="${dotx}" cy="${doty}" r="9" fill="#0e0e0e"/>
-    <circle cx="${dotx}" cy="${doty}" r="7" fill="${color}"/>
-    <circle cx="${dotx}" cy="${doty}" r="2.5" fill="#0e0e0e"/>
-    <text x="110" y="93" text-anchor="middle" fill="${color}"
-          font-family="'DM Serif Display', serif" font-style="italic" font-size="46">${score}</text>
-    <text x="110" y="111" text-anchor="middle" fill="#666"
+    <!-- dim full track -->
+    <path d="${track}" pathLength="100" fill="none" stroke="#242424" stroke-width="14" stroke-linecap="round"/>
+    <!-- gradient fill from the left (bear) stopping at the score -->
+    <path d="${track}" pathLength="100" fill="none" stroke="url(#gaugeGrad)" stroke-width="14"
+          stroke-linecap="round" stroke-dasharray="${score} 100"/>
+    <!-- score in the centre -->
+    <text x="110" y="86" text-anchor="middle" fill="${color}"
+          font-family="'DM Serif Display', serif" font-style="italic" font-size="44">${score}</text>
+    <text x="110" y="104" text-anchor="middle" fill="#666"
           font-family="'DM Mono', monospace" font-size="10" letter-spacing="1.5">/ 100</text>
-    <text x="14"  y="130" fill="#ff7a6b" font-size="9" font-family="'DM Mono', monospace">BEAR</text>
-    <text x="206" y="130" fill="#a8e060" font-size="9" font-family="'DM Mono', monospace" text-anchor="end">BULL</text>
+    <!-- end labels sit BELOW the arc so they're always readable -->
+    <text x="${cx-r}" y="133" text-anchor="middle" fill="#8a8a8a" font-size="9.5" letter-spacing="1" font-family="'DM Mono', monospace">BEAR</text>
+    <text x="${cx+r}" y="133" text-anchor="middle" fill="#8a8a8a" font-size="9.5" letter-spacing="1" font-family="'DM Mono', monospace">BULL</text>
   </svg>`;
 }
 
