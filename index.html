@@ -37,7 +37,9 @@ body::before {
 
 /* ── Header ── */
 header { margin-bottom: 36px; animation: fadeDown 0.6s ease both; }
-.eyebrow { font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
+.eyebrow { font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; display:flex; align-items:center; gap:8px; }
+.eyebrow .live-pip { width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 0 rgba(200,240,96,0.6); animation: livePulse 2s ease infinite; }
+@keyframes livePulse { 0%{box-shadow:0 0 0 0 rgba(200,240,96,0.5)} 70%{box-shadow:0 0 0 7px rgba(200,240,96,0)} 100%{box-shadow:0 0 0 0 rgba(200,240,96,0)} }
 h1 { font-family: 'DM Serif Display', serif; font-size: clamp(32px, 7vw, 52px); line-height: 1.05; font-style: italic; }
 h1 span { color: var(--accent); font-style: normal; }
 .subtitle { margin-top: 10px; color: var(--muted); font-size: 12px; line-height: 1.6; }
@@ -85,7 +87,9 @@ select:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .coin-name { font-family: 'DM Serif Display', serif; font-size: 20px; font-style: italic; display: flex; align-items: center; gap: 10px; }
 .coin-icon { width: 28px; height: 28px; border-radius: 50%; }
-.coin-price { font-size: 22px; font-weight: 500; }
+.coin-price { font-size: 22px; font-weight: 500; transition: color 0.45s; }
+.coin-price.flash-up  { color: var(--bull); }
+.coin-price.flash-dn  { color: var(--bear); }
 .coin-change { font-size: 12px; padding: 4px 10px; border-radius: 6px; }
 .coin-change.bull { background: rgba(200,240,96,0.12); color: var(--bull); }
 .coin-change.bear { background: rgba(255,107,107,0.12); color: var(--bear); }
@@ -125,13 +129,20 @@ select:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── Chart card ── */
 .chart-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; animation: fadeUp 0.5s ease 0.2s both; }
-.chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; gap:12px; flex-wrap:wrap; }
 .section-label { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent); display: flex; align-items: center; gap: 10px; }
 .section-label::after { content: ''; width: 40px; height: 1px; background: var(--border); }
 
 /* Chart timeframe label shown inside chart header */
 .tf-label { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 .tf-label strong { color: var(--accent2); }
+
+/* Live / last-updated indicator */
+.live-tag { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); display:flex; align-items:center; gap:7px; }
+.live-tag .dot { width:6px; height:6px; border-radius:50%; background:var(--accent); transition: background 0.3s; }
+.live-tag.stale .dot { background: var(--accent2); }
+.live-tag.offline .dot { background: var(--bear); }
+.live-tag.syncing .dot { animation: livePulse 1.2s ease infinite; }
 
 .ai-badge { display: none; align-items: center; gap: 6px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent2); padding: 4px 10px; border: 1px solid rgba(240,184,96,0.35); border-radius: 99px; animation: pulse 2s ease infinite; }
 .ai-badge.on { display: flex; }
@@ -140,7 +151,7 @@ select:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── Canvas area ── */
 .chart-wrap { position: relative; width: 100%; height: 420px; background: var(--surface); border-radius: 10px; overflow: hidden; }
-canvas { display: block; }
+canvas { display: block; width: 100%; height: 100%; }
 
 #tooltip {
   position: absolute; pointer-events: none; display: none;
@@ -194,6 +205,24 @@ canvas { display: block; }
 .loading-msg .dots span:nth-child(2) { animation-delay: 0.2s; }
 .loading-msg .dots span:nth-child(3) { animation-delay: 0.4s; }
 
+/* Error state inside the overlay */
+.loading.error .loading-ring,
+.loading.error .skel-bars { display: none; }
+.err-icon { font-size: 34px; line-height: 1; display: none; }
+.loading.error .err-icon { display: block; }
+.loading.error .loading-msg { display: none; }
+.err-msg { display: none; font-size: 11px; letter-spacing: 0.1em; color: var(--bear); text-align:center; max-width: 320px; line-height: 1.7; }
+.loading.error .err-msg { display: block; }
+.retry-btn {
+  display: none; margin-top: 4px;
+  background: var(--accent); color: #0e0e0e; border: none;
+  font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.12em;
+  text-transform: uppercase; font-weight: 500;
+  padding: 10px 22px; border-radius: 8px; cursor: pointer; transition: opacity 0.2s;
+}
+.retry-btn:hover { opacity: 0.85; }
+.loading.error .retry-btn { display: inline-block; }
+
 /* Skeleton canvas bars — drawn while loading */
 .skel-bars {
   display: flex; align-items: flex-end; gap: 3px;
@@ -223,6 +252,17 @@ canvas { display: block; }
 .ai-insight p { font-size: 12px; color: var(--muted); line-height: 1.85; }
 .ai-insight strong { color: var(--text); }
 
+/* Toast — non-blocking notice for background errors / rate limits */
+.toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px);
+  background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--accent2);
+  color: var(--text); font-size: 12px; letter-spacing: 0.03em;
+  padding: 12px 18px; border-radius: 10px; z-index: 50;
+  opacity: 0; pointer-events: none; transition: opacity 0.3s, transform 0.3s;
+  max-width: 90vw;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
 footer { margin-top: 40px; text-align: center; font-size: 11px; color: #3a3a3a; letter-spacing: 0.1em; }
 @keyframes fadeDown { from{opacity:0;transform:translateY(-14px)} to{opacity:1;transform:none} }
 @keyframes fadeUp   { from{opacity:0;transform:translateY(14px)}  to{opacity:1;transform:none} }
@@ -237,7 +277,7 @@ footer { margin-top: 40px; text-align: center; font-size: 11px; color: #3a3a3a; 
 <div class="wrapper">
 
   <header>
-    <div class="eyebrow">● Live Markets</div>
+    <div class="eyebrow"><span class="live-pip"></span> Live Markets</div>
     <h1>Crypto<span>Scope</span></h1>
     <p class="subtitle">Real-time candlestick charts · Top 20 by market cap · AI trend overlay</p>
   </header>
@@ -285,7 +325,8 @@ footer { margin-top: 40px; text-align: center; font-size: 11px; color: #3a3a3a; 
   <div class="chart-card">
     <div class="chart-header">
       <div class="section-label">Candlestick Chart</div>
-      <div style="display:flex;align-items:center;gap:14px">
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <div class="live-tag syncing" id="liveTag"><span class="dot"></span><span id="liveTxt">Connecting…</span></div>
         <div class="tf-label" id="tfLabel">Timeframe <strong>1H</strong></div>
         <div class="ai-badge" id="aiBadge"><div class="ai-badge-dot"></div>AI Active</div>
       </div>
@@ -296,11 +337,14 @@ footer { margin-top: 40px; text-align: center; font-size: 11px; color: #3a3a3a; 
       <div class="loading" id="loading">
         <div class="skel-bars" id="skelBars"></div>
         <div class="loading-ring"></div>
+        <div class="err-icon">⚠</div>
         <div class="loading-coin" id="loadingCoinName">—</div>
         <div class="loading-msg">
           Loading chart data
           <div class="dots"><span></span><span></span><span></span></div>
         </div>
+        <div class="err-msg" id="errMsg">Couldn't reach the market data service.</div>
+        <button class="retry-btn" id="retryBtn">Retry</button>
       </div>
       <canvas id="cv"></canvas>
       <div id="tooltip"></div>
@@ -324,6 +368,8 @@ footer { margin-top: 40px; text-align: center; font-size: 11px; color: #3a3a3a; 
   <footer>CryptoScope · Data via CoinGecko · AI projections are statistical estimates, not financial advice.</footer>
 </div>
 
+<div class="toast" id="toast"></div>
+
 <script>
 /* ─── Constants ────────────────────────────────────────────────────────────── */
 const BULL_C  = '#c8f060';
@@ -337,6 +383,14 @@ const PAD     = { top:18, right:78, bottom:28, left:8 };
 
 const TF_LABELS = { 1:'1H', 4:'4H', 24:'1D', 168:'1W' };
 const TF_DAYS   = { 1:1, 4:7, 24:30, 168:180 };
+// Live auto-refresh cadence per timeframe (ms). Coarser frames refresh less often
+// to stay friendly with CoinGecko's free-tier rate limits.
+const TF_REFRESH = { 1:30000, 4:60000, 24:120000, 168:300000 };
+
+const API   = 'https://api.coingecko.com/api/v3';
+// Cache TTLs — long enough to absorb rapid UI toggles & rate limits.
+const MARKETS_TTL = 25000;   // ms for the top-20 markets snapshot
+const OHLC_TTL    = 25000;   // ms per (coin, timeframe) candle set
 
 /* ─── State ─────────────────────────────────────────────────────────────────── */
 let coins     = [];
@@ -344,13 +398,28 @@ let ohlcData  = [];
 let aiEnabled = false;
 let currentTF = 1;      // always a Number
 let isFetching = false;
+let reqId      = 0;     // monotonically increasing token — guards against stale responses
+let refreshTimer = null;
+let lastUpdated  = 0;
+let lastPrice    = null;
+let model        = null; // precomputed render model (EMAs, forecast, scales)
 
-/* ─── Canvas ────────────────────────────────────────────────────────────────── */
+/* ─── Canvas (devicePixelRatio-aware for crisp, non-blurry rendering) ────────── */
 const cv   = document.getElementById('cv');
 const ctx2 = cv.getContext('2d');
 const wrap = document.getElementById('chartWrap');
+let CW = 0, CH = 0; // logical (CSS px) canvas size
 
-function sizeCanvas() { cv.width = wrap.clientWidth; cv.height = wrap.clientHeight; }
+function sizeCanvas() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  CW = wrap.clientWidth;
+  CH = wrap.clientHeight;
+  cv.width  = Math.round(CW * dpr);
+  cv.height = Math.round(CH * dpr);
+  cv.style.width  = CW + 'px';
+  cv.style.height = CH + 'px';
+  ctx2.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS pixels
+}
 
 /* ─── Skeleton bars (decorative) ───────────────────────────────────────────── */
 (function buildSkel() {
@@ -359,23 +428,98 @@ function sizeCanvas() { cv.width = wrap.clientWidth; cv.height = wrap.clientHeig
     heights.map(h => `<div class="skel-bar" style="height:${h}px"></div>`).join('');
 })();
 
+/* ─── Toast ─────────────────────────────────────────────────────────────────── */
+let toastTimer = null;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
+}
+
+/* ─── Live status tag ───────────────────────────────────────────────────────── */
+function setLive(state, text) {
+  const tag = document.getElementById('liveTag');
+  tag.className = 'live-tag' + (state ? ' ' + state : '');
+  if (text != null) document.getElementById('liveTxt').textContent = text;
+}
+function tickLiveLabel() {
+  if (!lastUpdated) return;
+  const secs = Math.round((Date.now() - lastUpdated) / 1000);
+  let txt;
+  if (secs < 5)        txt = 'Live · just now';
+  else if (secs < 60)  txt = `Live · ${secs}s ago`;
+  else                 txt = `Live · ${Math.round(secs/60)}m ago`;
+  const tag = document.getElementById('liveTag');
+  if (!tag.classList.contains('offline') && !tag.classList.contains('syncing')) {
+    document.getElementById('liveTxt').textContent = txt;
+    tag.classList.toggle('stale', secs > 90);
+  }
+}
+setInterval(tickLiveLabel, 1000);
+
+/* ─── Robust fetch: timeout + retry w/ exponential backoff + 429 awareness ──── */
+async function fetchJSON(url, { tries = 3, timeout = 9000 } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    const ctrl = new AbortController();
+    const to   = setTimeout(() => ctrl.abort(), timeout);
+    try {
+      const r = await fetch(url, { signal: ctrl.signal, headers: { accept: 'application/json' } });
+      clearTimeout(to);
+      if (r.status === 429) {
+        // Rate limited — respect Retry-After if present, else back off.
+        const ra = parseFloat(r.headers.get('retry-after'));
+        const wait = (Number.isFinite(ra) ? ra * 1000 : 1500 * (attempt + 1));
+        if (attempt < tries - 1) { await sleep(Math.min(wait, 8000)); continue; }
+        throw new RateLimitError();
+      }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return await r.json();
+    } catch (e) {
+      clearTimeout(to);
+      lastErr = e;
+      // Don't keep retrying on the final attempt; otherwise back off (250,500,1000ms…)
+      if (attempt < tries - 1) await sleep(250 * Math.pow(2, attempt));
+    }
+  }
+  throw lastErr || new Error('Request failed');
+}
+function sleep(ms) { return new Promise(res => setTimeout(res, ms)); }
+class RateLimitError extends Error { constructor(){ super('Rate limited'); this.rateLimited = true; } }
+
+/* ─── Tiny TTL cache ────────────────────────────────────────────────────────── */
+const cache = new Map();
+async function cachedJSON(key, url, ttl, opts) {
+  const hit = cache.get(key);
+  if (hit && Date.now() < hit.exp) return hit.data;
+  try {
+    const data = await fetchJSON(url, opts);
+    cache.set(key, { data, exp: Date.now() + ttl });
+    return data;
+  } catch (e) {
+    // Serve stale-on-error if we have anything cached — keeps the UI alive.
+    if (hit) { e.servedStale = true; return hit.data; }
+    throw e;
+  }
+}
+
 /* ─── Loading state helpers ─────────────────────────────────────────────────── */
 function setLoading(coinName) {
   isFetching = true;
-  // Overlay
+  const overlay = document.getElementById('loading');
+  overlay.classList.remove('hidden', 'error');
   document.getElementById('loadingCoinName').textContent = coinName || '—';
-  document.getElementById('loading').classList.remove('hidden');
-  // Status bar glow + fetch indicator
   document.getElementById('statusBar').classList.add('fetching');
   document.getElementById('fetchIndicator').classList.add('visible');
-  // Shimmer stats
   ['coinVol','coinMcap','coinHigh','coinLow'].forEach(id => {
     document.getElementById(id).innerHTML = '<span class="shimmer"></span>';
   });
-  // Disable controls
   document.getElementById('coinSelect').disabled = true;
   document.getElementById('tfGroup').classList.add('disabled');
   document.getElementById('aiToggle').classList.add('disabled');
+  setLive('syncing', 'Loading…');
 }
 
 function clearLoading() {
@@ -388,21 +532,39 @@ function clearLoading() {
   document.getElementById('aiToggle').classList.remove('disabled');
 }
 
+function showError(msg) {
+  isFetching = false;
+  const overlay = document.getElementById('loading');
+  overlay.classList.remove('hidden');
+  overlay.classList.add('error');
+  document.getElementById('errMsg').textContent = msg;
+  document.getElementById('statusBar').classList.remove('fetching');
+  document.getElementById('fetchIndicator').classList.remove('visible');
+  document.getElementById('coinSelect').disabled = false;
+  document.getElementById('tfGroup').classList.remove('disabled');
+  document.getElementById('aiToggle').classList.remove('disabled');
+  setLive('offline', 'Offline');
+}
+
 /* ─── Boot: fetch top 20 ────────────────────────────────────────────────────── */
 async function boot() {
+  setLive('syncing', 'Connecting…');
   try {
-    const r = await fetch(
-      'https://api.coingecko.com/api/v3/coins/markets' +
-      '?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false'
+    coins = await cachedJSON(
+      'markets',
+      `${API}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`,
+      MARKETS_TTL
     );
-    coins = await r.json();
+    if (!Array.isArray(coins) || !coins.length) throw new Error('No market data');
     document.getElementById('coinSelect').innerHTML = coins.map(c =>
       `<option value="${c.id}">${c.symbol.toUpperCase()} — ${c.name}</option>`
     ).join('');
     await loadChart();
-  } catch(e) {
-    document.getElementById('coinSelect').innerHTML = '<option>Error — check network</option>';
-    clearLoading();
+  } catch (e) {
+    document.getElementById('coinSelect').innerHTML = '<option value="">Retry…</option>';
+    showError(e.rateLimited
+      ? 'Rate limited by CoinGecko. Give it a few seconds and retry.'
+      : 'Couldn’t load the coin list. Check your connection and retry.');
   }
 }
 
@@ -411,7 +573,20 @@ function refreshBar(coin, shimmerStats) {
   if (!coin) return;
   const img = coin.image ? `<img class="coin-icon" src="${coin.image}" onerror="this.remove()"/>` : '';
   document.getElementById('coinName').innerHTML    = `${img}${coin.name}`;
-  document.getElementById('coinPrice').textContent = fmtUSD(coin.current_price);
+
+  // Price with directional flash on change
+  const priceEl = document.getElementById('coinPrice');
+  const newPrice = coin.current_price;
+  priceEl.textContent = fmtUSD(newPrice);
+  if (lastPrice != null && newPrice != null && newPrice !== lastPrice) {
+    const cls = newPrice > lastPrice ? 'flash-up' : 'flash-dn';
+    priceEl.classList.remove('flash-up', 'flash-dn');
+    void priceEl.offsetWidth; // restart transition
+    priceEl.classList.add(cls);
+    setTimeout(() => priceEl.classList.remove(cls), 600);
+  }
+  lastPrice = newPrice;
+
   const pct = +(coin.price_change_percentage_24h || 0);
   const el  = document.getElementById('coinChange');
   el.textContent = (pct >= 0 ? '▲ +' : '▼ ') + Math.abs(pct).toFixed(2) + '%';
@@ -425,13 +600,26 @@ function refreshBar(coin, shimmerStats) {
 }
 
 /* ─── Fetch OHLC ─────────────────────────────────────────────────────────────── */
-async function fetchOHLC(coinId, tf) {
+async function fetchOHLC(coinId, tf, { fresh = false } = {}) {
   const days = TF_DAYS[tf] || 1;
-  const url  = `https://api.coingecko.com/api/v3/coins/${coinId}/ohlc?vs_currency=usd&days=${days}`;
-  const r    = await fetch(url);
-  const raw  = await r.json();
+  const key  = `ohlc:${coinId}:${tf}`;
+  if (fresh) cache.delete(key);
+  const raw  = await cachedJSON(
+    key,
+    `${API}/coins/${coinId}/ohlc?vs_currency=usd&days=${days}`,
+    OHLC_TTL
+  );
   if (!Array.isArray(raw) || raw.length === 0) throw new Error('Empty OHLC');
   return raw.map(d => ({ t:+d[0], o:+d[1], h:+d[2], l:+d[3], c:+d[4] }));
+}
+
+/* ─── Fetch a single coin's latest market data (cheap live price refresh) ────── */
+async function fetchCoinMarket(coinId) {
+  const arr = await fetchJSON(
+    `${API}/coins/markets?vs_currency=usd&ids=${coinId}&price_change_percentage=24h`,
+    { tries: 2, timeout: 7000 }
+  );
+  return Array.isArray(arr) && arr[0] ? arr[0] : null;
 }
 
 /* ─── Math ───────────────────────────────────────────────────────────────────── */
@@ -480,23 +668,15 @@ function buildForecast(closes, times) {
   return { pts, slope, sigma, fBars };
 }
 
-/* ─── Draw ───────────────────────────────────────────────────────────────────── */
-let _sx, _sy;
-
-function draw(hoverIdx) {
-  if (!ohlcData.length) return;
-  const W = cv.width, H = cv.height;
-  const pw = W - PAD.left - PAD.right;
-  const ph = H - PAD.top  - PAD.bottom;
-  ctx2.clearRect(0, 0, W, H);
-
+/* ─── Build render model once per data change (so hover redraws are cheap) ───── */
+function rebuildModel() {
+  if (!ohlcData.length) { model = null; return; }
   const closes = ohlcData.map(d=>d.c);
   const times  = ohlcData.map(d=>d.t);
   const e20    = calcEMA(closes, Math.min(20, closes.length));
   const e50    = calcEMA(closes, Math.min(50, closes.length));
   const fc     = aiEnabled ? buildForecast(closes, times) : null;
 
-  // Y range
   const allY = [...ohlcData.flatMap(d=>[d.h,d.l]), ...e20.filter(Boolean), ...e50.filter(Boolean)];
   if (fc) allY.push(...fc.pts.flatMap(p=>[p.upper,p.lower]));
   const yMin = Math.min(...allY), yMax = Math.max(...allY);
@@ -506,10 +686,25 @@ function draw(hoverIdx) {
   const fcLen = fc ? fc.pts.length-1 : 0;
   const nBars = ohlcData.length + fcLen;
 
+  model = { closes, times, e20, e50, fc, yLo, yRng, nBars, fcLen };
+}
+
+/* ─── Draw ───────────────────────────────────────────────────────────────────── */
+let _sx, _sy;
+
+function draw(hoverIdx) {
+  if (!model || !ohlcData.length) { ctx2.clearRect(0,0,CW,CH); return; }
+  const W = CW, H = CH;
+  const pw = W - PAD.left - PAD.right;
+  const ph = H - PAD.top  - PAD.bottom;
+  ctx2.clearRect(0, 0, W, H);
+
+  const { e20, e50, fc, yLo, yRng, nBars } = model;
+
   _sx = i => PAD.left + (i/Math.max(nBars-1,1))*pw;
   _sy = v => PAD.top  + ph*(1-(v-yLo)/yRng);
 
-  // Grid + Y axis labels only (no X labels — shown dynamically on hover)
+  // Grid + Y axis labels
   for (let i=0;i<=6;i++) {
     const v = yLo+yRng*(i/6), y = _sy(v);
     ctx2.strokeStyle=GRID_C; ctx2.lineWidth=1;
@@ -547,16 +742,13 @@ function draw(hoverIdx) {
     const si = ohlcData.length-1;
     const sepX = _sx(si);
 
-    // Separator
     ctx2.save(); ctx2.strokeStyle='rgba(240,184,96,0.35)'; ctx2.lineWidth=1; ctx2.setLineDash([4,4]);
     ctx2.beginPath(); ctx2.moveTo(sepX,PAD.top); ctx2.lineTo(sepX,H-PAD.bottom); ctx2.stroke();
     ctx2.setLineDash([]); ctx2.restore();
 
-    // Label
     ctx2.fillStyle='rgba(240,184,96,0.6)'; ctx2.font='9px DM Mono,monospace'; ctx2.textAlign='center';
     ctx2.fillText('▶  FORECAST', (sepX+(W-PAD.right))/2, PAD.top+13);
 
-    // Band outlines
     ctx2.save(); ctx2.strokeStyle='rgba(240,184,96,0.3)'; ctx2.lineWidth=1; ctx2.setLineDash([2,5]);
     ['upper','lower'].forEach(k => {
       ctx2.beginPath();
@@ -565,7 +757,6 @@ function draw(hoverIdx) {
     });
     ctx2.setLineDash([]); ctx2.restore();
 
-    // Main projection line
     ctx2.save();
     ctx2.strokeStyle=AI_C; ctx2.lineWidth=2.5;
     ctx2.shadowColor='rgba(240,184,96,0.55)'; ctx2.shadowBlur=8;
@@ -583,18 +774,14 @@ function draw(hoverIdx) {
     const bull = d.c >= d.o;
 
     ctx2.save();
-
-    // Crosshair lines
     ctx2.strokeStyle='rgba(240,237,232,0.13)'; ctx2.lineWidth=1; ctx2.setLineDash([4,5]);
     ctx2.beginPath(); ctx2.moveTo(cx,PAD.top); ctx2.lineTo(cx,H-PAD.bottom); ctx2.stroke();
     ctx2.beginPath(); ctx2.moveTo(PAD.left,cy); ctx2.lineTo(W-PAD.right,cy); ctx2.stroke();
     ctx2.setLineDash([]);
 
-    // Dot on close
     ctx2.beginPath(); ctx2.arc(cx,cy,4,0,Math.PI*2);
     ctx2.fillStyle = bull ? BULL_C : BEAR_C; ctx2.fill();
 
-    // X label pinned at bottom axis
     const xLbl = fmtFull(d.t);
     ctx2.font   = '10px DM Mono,monospace';
     const xTw   = ctx2.measureText(xLbl).width;
@@ -605,7 +792,6 @@ function draw(hoverIdx) {
     ctx2.fillStyle='#f0ede8'; ctx2.textAlign='left';
     ctx2.fillText(xLbl, xBx+xPad, xBy+13);
 
-    // Y label pinned on right axis
     const yLbl = fmtPrice(d.c);
     const yTw  = ctx2.measureText(yLbl).width;
     const yBw  = yTw+xPad*2, yBh = 18;
@@ -640,85 +826,162 @@ function line(vals, color, width) {
   ctx2.stroke();
 }
 
-/* ─── Load chart ─────────────────────────────────────────────────────────────── */
+/* ─── Update AI insight text ────────────────────────────────────────────────── */
+function updateAIPanel(coin, coinId) {
+  document.getElementById('aiBadge').classList.toggle('on', aiEnabled);
+  document.getElementById('aiLegend').classList.toggle('on', aiEnabled);
+  if (!aiEnabled || !model || !model.fc) {
+    document.getElementById('aiInsight').classList.remove('on');
+    return;
+  }
+  const fc    = model.fc;
+  const closes= model.closes;
+  const lastC = closes[closes.length-1];
+  const endV  = fc.pts[fc.pts.length-1].v;
+  const chPct = ((endV-lastC)/lastC*100).toFixed(2);
+  const vol   = (fc.sigma*100).toFixed(3);
+  const trend = fc.slope>0 ? 'bullish' : 'bearish';
+  const str   = Math.abs(fc.slope/lastC*1000)>0.5 ? 'strong' : 'moderate';
+  document.getElementById('aiTxt').innerHTML =
+    `Based on <strong>${ohlcData.length} candles</strong> of ${TF_LABELS[currentTF]} price action,
+    the regression model detects a <strong>${str} ${trend} trend</strong> for ${coin?coin.name:coinId}.
+    Projected move over next <strong>${fc.fBars} bars</strong>:
+    <strong>${+chPct>0?'+':''}${chPct}%</strong>.
+    Per-bar volatility: <strong>${vol}%</strong> —
+    shaded area shows ±1σ confidence corridor.
+    ${Math.abs(+chPct)>5?'<br><strong style="color:var(--bear)">⚠ High momentum — elevated risk.</strong>':''}
+    <br><br><em style="color:#555">Statistical projection only — not financial advice.</em>`;
+  document.getElementById('aiInsight').classList.add('on');
+}
+
+/* ─── Load chart (full load, with spinner) ──────────────────────────────────── */
 async function loadChart() {
   const coinId = document.getElementById('coinSelect').value;
   if (!coinId) return;
 
+  const myReq = ++reqId;            // claim this request
+  stopAutoRefresh();
   const coin = coins.find(c => c.id === coinId);
 
-  // Show loading state — with coin name immediately visible
   setLoading(coin ? coin.name : coinId);
   if (coin) refreshBar(coin, true); // show price/change immediately, shimmer stats
 
-  // Update TF label
   document.getElementById('tfLabel').innerHTML =
     `Timeframe <strong>${TF_LABELS[currentTF]}</strong>`;
 
+  let data;
   try {
-    ohlcData = await fetchOHLC(coinId, currentTF);
-  } catch(e) {
+    data = await fetchOHLC(coinId, currentTF);
+  } catch (e) {
+    if (myReq !== reqId) return;     // a newer request superseded us — bail quietly
     console.error('OHLC fetch failed:', e);
-    clearLoading();
+    showError(e.rateLimited
+      ? 'CoinGecko rate limit hit. Wait a moment, then retry.'
+      : 'Couldn’t load chart data for this coin. Retry?');
     return;
   }
 
-  // Fill in real stats now data arrived
+  if (myReq !== reqId) return;       // stale response — discard
+
+  ohlcData = data;
   if (coin) refreshBar(coin, false);
 
   sizeCanvas();
+  rebuildModel();
   draw();
   clearLoading();
+  updateAIPanel(coin, coinId);
 
-  // AI UI
-  document.getElementById('aiBadge').classList.toggle('on', aiEnabled);
-  document.getElementById('aiLegend').classList.toggle('on', aiEnabled);
+  lastUpdated = Date.now();
+  setLive('', 'Live · just now');
+  startAutoRefresh();
+}
 
-  if (aiEnabled) {
-    const closes = ohlcData.map(d=>d.c);
-    const times  = ohlcData.map(d=>d.t);
-    const fc     = buildForecast(closes, times);
-    const lastC  = closes[closes.length-1];
-    const endV   = fc.pts[fc.pts.length-1].v;
-    const chPct  = ((endV-lastC)/lastC*100).toFixed(2);
-    const vol    = (fc.sigma*100).toFixed(3);
-    const trend  = fc.slope>0 ? 'bullish' : 'bearish';
-    const str    = Math.abs(fc.slope/lastC*1000)>0.5 ? 'strong' : 'moderate';
-    document.getElementById('aiTxt').innerHTML =
-      `Based on <strong>${ohlcData.length} candles</strong> of ${TF_LABELS[currentTF]} price action,
-      the regression model detects a <strong>${str} ${trend} trend</strong> for ${coin?coin.name:coinId}.
-      Projected move over next <strong>${fc.fBars} bars</strong>:
-      <strong>${+chPct>0?'+':''}${chPct}%</strong>.
-      Per-bar volatility: <strong>${vol}%</strong> —
-      shaded area shows ±1σ confidence corridor.
-      ${Math.abs(+chPct)>5?'<br><strong style="color:var(--bear)">⚠ High momentum — elevated risk.</strong>':''}
-      <br><br><em style="color:#555">Statistical projection only — not financial advice.</em>`;
-    document.getElementById('aiInsight').classList.add('on');
-  } else {
-    document.getElementById('aiInsight').classList.remove('on');
+/* ─── Silent live refresh (no spinner, no control lockout) ──────────────────── */
+async function refreshLive() {
+  const coinId = document.getElementById('coinSelect').value;
+  if (!coinId || isFetching || document.hidden) return;
+
+  const myReq = reqId;               // piggyback on current request generation
+  setLive('syncing', 'Updating…');
+  try {
+    // Fetch fresh candles + latest price in parallel.
+    const [data, market] = await Promise.all([
+      fetchOHLC(coinId, currentTF, { fresh: true }),
+      fetchCoinMarket(coinId).catch(() => null)
+    ]);
+    if (myReq !== reqId) return;     // user switched coin/TF mid-flight
+
+    ohlcData = data;
+    const coin = coins.find(c => c.id === coinId);
+    if (market && coin) Object.assign(coin, market);
+    if (coin) refreshBar(coin, false);
+
+    rebuildModel();
+    requestDraw();
+    updateAIPanel(coin, coinId);
+
+    lastUpdated = Date.now();
+    setLive('', 'Live · just now');
+  } catch (e) {
+    if (myReq !== reqId) return;
+    // Background failure — keep showing existing data, just flag staleness.
+    setLive('stale', 'Reconnecting…');
+    if (e.rateLimited) toast('Rate limited — backing off live updates.');
   }
 }
 
-/* ─── Crosshair / tooltip — mouse + touch ────────────────────────────────────── */
-const tooltip = document.getElementById('tooltip');
+function startAutoRefresh() {
+  stopAutoRefresh();
+  const interval = TF_REFRESH[currentTF] || 60000;
+  refreshTimer = setInterval(refreshLive, interval);
+}
+function stopAutoRefresh() {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+}
 
-function handlePointer(clientX, clientY) {
+// Pause polling when tab is hidden; refresh immediately when it returns.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    stopAutoRefresh();
+  } else if (ohlcData.length) {
+    // If data is stale on return, refresh right away then resume cadence.
+    if (Date.now() - lastUpdated > 15000) refreshLive();
+    startAutoRefresh();
+  }
+});
+
+/* ─── Crosshair / tooltip — rAF-throttled for smoothness ─────────────────────── */
+const tooltip = document.getElementById('tooltip');
+let pendingHover = null;   // {clientX, clientY} or 'clear'
+let rafQueued = false;
+
+function requestDraw(hoverIdx) {
+  if (rafQueued) return;
+  rafQueued = true;
+  requestAnimationFrame(() => {
+    rafQueued = false;
+    if (pendingHover === 'clear') { tooltip.style.display='none'; draw(); pendingHover=null; return; }
+    if (pendingHover) { renderHover(pendingHover.x, pendingHover.y); pendingHover=null; }
+    else draw(hoverIdx);
+  });
+}
+
+function renderHover(clientX, clientY) {
   if (!ohlcData.length || isFetching) return;
   const rect = cv.getBoundingClientRect();
-  const mx   = (clientX - rect.left) * (cv.width / rect.width);
-  const pw   = cv.width - PAD.left - PAD.right;
+  const mx   = (clientX - rect.left);
+  const pw   = CW - PAD.left - PAD.right;
   const idx  = Math.round(((mx - PAD.left) / pw) * (ohlcData.length - 1));
-  if (idx < 0 || idx >= ohlcData.length) { clearHover(); return; }
+  if (idx < 0 || idx >= ohlcData.length) { tooltip.style.display='none'; draw(); return; }
 
   draw(idx);
 
   const d    = ohlcData[idx];
   const bull = d.c >= d.o;
   const ty   = (clientY - rect.top) - 24;
-
-  // Position tooltip — flip to left if too close to right edge
-  const tx = clientX - rect.left + 18;
-  const tw = 190;
+  const tx   = clientX - rect.left + 18;
+  const tw   = 190;
   tooltip.style.display = 'block';
   tooltip.style.left = (tx + tw > rect.width ? tx - tw - 28 : tx) + 'px';
   tooltip.style.top  = Math.max(4, Math.min(ty, rect.height - 90)) + 'px';
@@ -730,20 +993,18 @@ function handlePointer(clientX, clientY) {
     `<span style="color:var(--muted)">C</span> <strong style="color:${bull?'var(--bull)':'var(--bear)'}">${fmtUSD(d.c)}</strong>`;
 }
 
-function clearHover() {
-  tooltip.style.display = 'none';
-  draw();
-}
+function onPointer(clientX, clientY) { pendingHover = { x: clientX, y: clientY }; requestDraw(); }
+function clearHover() { pendingHover = 'clear'; requestDraw(); }
 
 // Mouse
-cv.addEventListener('mousemove', e => handlePointer(e.clientX, e.clientY));
+cv.addEventListener('mousemove', e => onPointer(e.clientX, e.clientY));
 cv.addEventListener('mouseleave', clearHover);
 
-// Touch — prevent scroll while dragging on chart
+// Touch
 cv.addEventListener('touchmove', e => {
   e.preventDefault();
   const t = e.touches[0];
-  handlePointer(t.clientX, t.clientY);
+  onPointer(t.clientX, t.clientY);
 }, { passive: false });
 cv.addEventListener('touchend', clearHover);
 cv.addEventListener('touchcancel', clearHover);
@@ -759,10 +1020,26 @@ document.getElementById('aiToggle').addEventListener('click', () => {
   if (isFetching) return;
   aiEnabled = !aiEnabled;
   document.getElementById('aiToggle').classList.toggle('active', aiEnabled);
-  if (ohlcData.length) loadChart();
+  if (ohlcData.length) {
+    // No network needed — just recompute the model and redraw.
+    rebuildModel();
+    requestDraw();
+    const coinId = document.getElementById('coinSelect').value;
+    updateAIPanel(coins.find(c => c.id === coinId), coinId);
+  }
 });
 
-window.addEventListener('resize', () => { sizeCanvas(); draw(); });
+document.getElementById('retryBtn').addEventListener('click', () => {
+  if (!coins.length) boot();
+  else loadChart();
+});
+
+// Debounced resize so dragging the window doesn't thrash redraws.
+let resizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { sizeCanvas(); draw(); }, 120);
+});
 
 /* ─── Formatters ─────────────────────────────────────────────────────────────── */
 function fmtUSD(n) {
@@ -783,11 +1060,6 @@ function fmtBig(n) {
   if (n>=1e9)  return '$'+(n/1e9).toFixed(2)+'B';
   if (n>=1e6)  return '$'+(n/1e6).toFixed(2)+'M';
   return '$'+n.toLocaleString();
-}
-function fmtTime(ts) {
-  const d=new Date(ts);
-  if (currentTF<=4) return d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-  return d.toLocaleDateString([],{month:'short',day:'numeric'});
 }
 function fmtFull(ts) {
   return new Date(ts).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
