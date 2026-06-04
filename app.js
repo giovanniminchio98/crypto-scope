@@ -492,7 +492,7 @@ function gaugeSVG(score, color) {
   const cx=110, cy=104, r=88;
   const track = `M ${cx-r} ${cy} A ${r} ${r} 0 0 0 ${cx+r} ${cy}`;
   return `
-  <svg class="gauge" viewBox="0 0 220 140" width="100%" height="100%">
+  <svg class="gauge" viewBox="0 0 220 112" width="100%" height="100%">
     <defs>
       <linearGradient id="gaugeGrad" x1="${cx-r}" y1="0" x2="${cx+r}" y2="0" gradientUnits="userSpaceOnUse">
         <stop offset="0%"   stop-color="#ff4d4d"/>
@@ -512,9 +512,6 @@ function gaugeSVG(score, color) {
           font-family="'DM Serif Display', serif" font-style="italic" font-size="44">${score}</text>
     <text x="110" y="104" text-anchor="middle" fill="#666"
           font-family="'DM Mono', monospace" font-size="10" letter-spacing="1.5">/ 100</text>
-    <!-- end labels sit BELOW the arc so they're always readable -->
-    <text x="${cx-r}" y="133" text-anchor="middle" fill="#8a8a8a" font-size="9.5" letter-spacing="1" font-family="'DM Mono', monospace">BEAR</text>
-    <text x="${cx+r}" y="133" text-anchor="middle" fill="#8a8a8a" font-size="9.5" letter-spacing="1" font-family="'DM Mono', monospace">BULL</text>
   </svg>`;
 }
 
@@ -581,6 +578,7 @@ function renderOracle(res) {
       <div class="ocard-title">Oracle Verdict</div>
       ${odesc('All signals fused into one score, 0–100.', '50 = neutral · higher = stronger bullish odds.')}
       <div class="gauge-wrap">${gaugeSVG(C.score, col)}</div>
+      <div class="gauge-ends"><span class="ge-bear">◀ Bear</span><span class="ge-bull">Bull ▶</span></div>
       <div class="verdict-label" style="color:${col}">${C.label}</div>
       <div class="verdict-conf">Confidence <strong>${C.confidence}%</strong> · ${res.meta.bars} candles</div>
       <div class="verdict-regime">${res.regime.label}</div>
