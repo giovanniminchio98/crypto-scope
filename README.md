@@ -6,11 +6,12 @@ step, no dependencies. Data via the [CoinGecko API](https://www.coingecko.com/en
 
 ## Files
 
-| File         | Purpose                                              |
-|--------------|------------------------------------------------------|
-| `index.html` | Markup + layout                                      |
-| `styles.css` | All styling (dark theme, animations, responsive)     |
-| `app.js`     | Data fetching, caching, canvas chart, live refresh   |
+| File         | Purpose                                                       |
+|--------------|---------------------------------------------------------------|
+| `index.html` | Markup + layout (clearly divided sections)                    |
+| `styles.css` | All styling (dark theme, animations, responsive)              |
+| `oracle.js`  | Quant analytics engine — pure functions, no DOM (the "oracle")|
+| `app.js`     | Data fetching, caching, canvas chart, live refresh, dashboard |
 
 ## Run locally
 
@@ -43,6 +44,25 @@ config line near the bottom of `index.html`:
 You can also override `apiBase` there (e.g. to point at the Pro API host or a
 proxy of your own).
 
+## The Oracle (quant engine)
+
+`oracle.js` derives a full probabilistic reading from the candle series — the
+kind of analytics you normally only see in quant terminals:
+
+- **Monte-Carlo GBM simulation** (3,000 paths) → a probability cone on the chart
+  plus a terminal-price distribution histogram, with concrete numbers: chance
+  up/down over the horizon, expected & median move, 90% interval, and target
+  **touch** probabilities (e.g. odds of tagging +1σ / ±5% / ±10%).
+- **Hurst exponent** (R/S analysis) → persistent/trending vs mean-reverting
+  regime detection.
+- **Risk profile** — annualized volatility, historical **VaR & CVaR** (expected
+  shortfall), max drawdown, Sharpe & Sortino.
+- **Distribution stats** — skewness, excess kurtosis (fat tails), lag-1
+  autocorrelation, Z-score.
+- **Signal matrix** — 8 weighted factors (EMA trend, regression slope, MACD,
+  RSI, Stochastic, Bollinger %B, Z-score, Hurst-adjusted drift) fused into a
+  single **verdict gauge** (0–100) with a confidence score and regime label.
+
 ## Features
 
 - **Robust API layer** — request timeouts, retries with exponential backoff,
@@ -50,11 +70,15 @@ proxy of your own).
   stale-on-error fallback so transient failures don't blank the chart.
 - **Live updates** — silent background auto-refresh per timeframe, paused when
   the tab is hidden; live "last updated" indicator and directional price flash.
+  A manual **Refresh** button force-bypasses the cache for price + candles.
 - **Smooth rendering** — `requestAnimationFrame`-throttled crosshair,
   precomputed chart model (so hovering doesn't recompute indicators),
-  devicePixelRatio-aware canvas, and debounced resize.
-- **Indicators** — EMA 20 / EMA 50 and an optional linear-regression forecast
-  with a ±1σ confidence band.
-- **Remembers your last coin, timeframe, and AI toggle** across reloads.
+  devicePixelRatio-aware canvas, on-chart time axis, and debounced resize.
+- **Remembers your last coin, timeframe, and cone toggle** across reloads.
 
-> AI projections are statistical estimates, not financial advice.
+### Social links
+
+Footer icons (X, Instagram, Telegram, GitHub) live at the bottom of
+`index.html`. Replace the placeholder `href="#"` values with your handles.
+
+> Quant model output is a statistical estimate, not financial advice.

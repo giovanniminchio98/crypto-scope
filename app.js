@@ -38,21 +38,22 @@ const LS_KEY = 'cryptoscope:prefs';
 /* ─── State ─────────────────────────────────────────────────────────────────── */
 let coins     = [];
 let ohlcData  = [];
-let aiEnabled = false;
-let currentTF = 1;      // always a Number
+let coneOn    = false;   // Monte-Carlo forecast cone overlay on the chart
+let currentTF = 1;       // always a Number
 let isFetching = false;
-let reqId      = 0;     // monotonically increasing token — guards against stale responses
+let reqId      = 0;      // monotonically increasing token — guards against stale responses
 let refreshTimer = null;
 let lastUpdated  = 0;
 let lastPrice    = null;
-let model        = null; // precomputed render model (EMAs, forecast, scales)
+let model        = null; // precomputed render model (EMAs, cone, scales)
+let oracle       = null; // latest Oracle.analyze() result
 
 /* ─── Persisted prefs ───────────────────────────────────────────────────────── */
 function loadPrefs() {
   try {
     const p = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
     if (TF_LABELS[p.tf]) currentTF = +p.tf;
-    if (typeof p.ai === 'boolean') aiEnabled = p.ai;
+    if (typeof p.cone === 'boolean') coneOn = p.cone;
     return p;
   } catch { return {}; }
 }
@@ -61,7 +62,7 @@ function savePrefs() {
     localStorage.setItem(LS_KEY, JSON.stringify({
       coin: document.getElementById('coinSelect').value,
       tf: currentTF,
-      ai: aiEnabled,
+      cone: coneOn,
     }));
   } catch { /* storage unavailable — ignore */ }
 }
@@ -135,7 +136,6 @@ async function fetchJSON(url, { tries = 3, timeout = 9000 } = {}) {
       const r = await fetch(withKey(url), { signal: ctrl.signal, headers: { accept: 'application/json' } });
       clearTimeout(to);
       if (r.status === 429) {
-        // Rate limited — respect Retry-After if present, else back off.
         const ra = parseFloat(r.headers.get('retry-after'));
         const wait = (Number.isFinite(ra) ? ra * 1000 : 1500 * (attempt + 1));
         if (attempt < tries - 1) { await sleep(Math.min(wait, 8000)); continue; }
@@ -146,7 +146,6 @@ async function fetchJSON(url, { tries = 3, timeout = 9000 } = {}) {
     } catch (e) {
       clearTimeout(to);
       lastErr = e;
-      // Don't keep retrying on the final attempt; otherwise back off (250,500,1000ms…)
       if (attempt < tries - 1) await sleep(250 * Math.pow(2, attempt));
     }
   }
@@ -165,7 +164,6 @@ async function cachedJSON(key, url, ttl, opts) {
     cache.set(key, { data, exp: Date.now() + ttl });
     return data;
   } catch (e) {
-    // Serve stale-on-error if we have anything cached — keeps the UI alive.
     if (hit) { e.servedStale = true; return hit.data; }
     throw e;
   }
@@ -185,6 +183,7 @@ function setLoading(coinName) {
   document.getElementById('coinSelect').disabled = true;
   document.getElementById('tfGroup').classList.add('disabled');
   document.getElementById('aiToggle').classList.add('disabled');
+  document.getElementById('refreshBtn').classList.add('spin');
   setLive('syncing', 'Loading…');
 }
 
@@ -196,6 +195,7 @@ function clearLoading() {
   document.getElementById('coinSelect').disabled = false;
   document.getElementById('tfGroup').classList.remove('disabled');
   document.getElementById('aiToggle').classList.remove('disabled');
+  document.getElementById('refreshBtn').classList.remove('spin');
 }
 
 function showError(msg) {
@@ -209,16 +209,16 @@ function showError(msg) {
   document.getElementById('coinSelect').disabled = false;
   document.getElementById('tfGroup').classList.remove('disabled');
   document.getElementById('aiToggle').classList.remove('disabled');
+  document.getElementById('refreshBtn').classList.remove('spin');
   setLive('offline', 'Offline');
 }
 
 /* ─── Boot: fetch top 20 ────────────────────────────────────────────────────── */
 async function boot() {
-  // Restore saved timeframe / AI state into the UI before first paint.
   const prefs = loadPrefs();
   document.querySelectorAll('input[name="tf"]').forEach(r => { r.checked = (+r.value === currentTF); });
   document.getElementById('tfLabel').innerHTML = `Timeframe <strong>${TF_LABELS[currentTF]}</strong>`;
-  document.getElementById('aiToggle').classList.toggle('active', aiEnabled);
+  document.getElementById('aiToggle').classList.toggle('active', coneOn);
 
   setLive('syncing', 'Connecting…');
   try {
@@ -231,7 +231,6 @@ async function boot() {
     document.getElementById('coinSelect').innerHTML = coins.map(c =>
       `<option value="${c.id}">${c.symbol.toUpperCase()} — ${c.name}</option>`
     ).join('');
-    // Restore previously selected coin if it's still in the top 20.
     if (prefs.coin && coins.some(c => c.id === prefs.coin)) {
       document.getElementById('coinSelect').value = prefs.coin;
     }
@@ -250,14 +249,13 @@ function refreshBar(coin, shimmerStats) {
   const img = coin.image ? `<img class="coin-icon" src="${coin.image}" onerror="this.remove()"/>` : '';
   document.getElementById('coinName').innerHTML    = `${img}${coin.name}`;
 
-  // Price with directional flash on change
   const priceEl = document.getElementById('coinPrice');
   const newPrice = coin.current_price;
   priceEl.textContent = fmtUSD(newPrice);
   if (lastPrice != null && newPrice != null && newPrice !== lastPrice) {
     const cls = newPrice > lastPrice ? 'flash-up' : 'flash-dn';
     priceEl.classList.remove('flash-up', 'flash-dn');
-    void priceEl.offsetWidth; // restart transition
+    void priceEl.offsetWidth;
     priceEl.classList.add(cls);
     setTimeout(() => priceEl.classList.remove(cls), 600);
   }
@@ -298,7 +296,7 @@ async function fetchCoinMarket(coinId) {
   return Array.isArray(arr) && arr[0] ? arr[0] : null;
 }
 
-/* ─── Math ───────────────────────────────────────────────────────────────────── */
+/* ─── EMA (for chart overlay lines only — Oracle computes its own) ──────────── */
 function calcEMA(vals, period) {
   const out = new Array(vals.length).fill(null);
   if (vals.length < period) return out;
@@ -309,60 +307,31 @@ function calcEMA(vals, period) {
   return out;
 }
 
-function calcLinReg(vals) {
-  const n = vals.length;
-  let sx=0,sy=0,sxy=0,sx2=0;
-  for (let i=0;i<n;i++) { sx+=i; sy+=vals[i]; sxy+=i*vals[i]; sx2+=i*i; }
-  const d = n*sx2 - sx*sx;
-  if (!d) return { slope:0, intercept:vals[0]||0 };
-  const slope = (n*sxy-sx*sy)/d;
-  return { slope, intercept:(sy-slope*sx)/n };
-}
-
-function calcVol(vals) {
-  if (vals.length < 2) return 0.01;
-  const rets = [];
-  for (let i=1;i<vals.length;i++) if(vals[i-1]) rets.push((vals[i]-vals[i-1])/vals[i-1]);
-  if (!rets.length) return 0.01;
-  const mu = rets.reduce((a,b)=>a+b,0)/rets.length;
-  return Math.sqrt(rets.reduce((a,b)=>a+(b-mu)**2,0)/rets.length) || 0.01;
-}
-
-function buildForecast(closes, times) {
-  const fBars = Math.max(8, Math.round(closes.length * 0.18));
-  const { slope, intercept } = calcLinReg(closes);
-  const sigma = calcVol(closes);
-  const dt    = times.length > 1 ? times[times.length-1] - times[times.length-2] : 3600000;
-  const lastT = times[times.length-1];
-  const lastC = closes[closes.length-1];
-  const pts   = [];
-  for (let f=0; f<=fBars; f++) {
-    const val  = f===0 ? lastC : slope*(closes.length-1+f)+intercept;
-    const band = lastC * sigma * Math.sqrt(f) * 3.0;
-    pts.push({ t:lastT+dt*f, v:val, upper:val+band, lower:val-band });
-  }
-  return { pts, slope, sigma, fBars };
-}
-
-/* ─── Build render model once per data change (so hover redraws are cheap) ───── */
+/* ─── Build render model (so hover redraws are cheap) ───────────────────────── */
 function rebuildModel() {
   if (!ohlcData.length) { model = null; return; }
   const closes = ohlcData.map(d=>d.c);
   const times  = ohlcData.map(d=>d.t);
   const e20    = calcEMA(closes, Math.min(20, closes.length));
   const e50    = calcEMA(closes, Math.min(50, closes.length));
-  const fc     = aiEnabled ? buildForecast(closes, times) : null;
+
+  // Monte-Carlo cone (future) from the Oracle result, only when overlay is on.
+  let cone = null, fcLen = 0;
+  if (coneOn && oracle && oracle.mc && oracle.mc.cone.length > 1) {
+    const dt = oracle.meta.barMs;
+    const lastT = times[times.length-1];
+    cone = oracle.mc.cone.map((c,i) => ({ t:lastT+dt*i, ...c }));
+    fcLen = cone.length - 1;
+  }
 
   const allY = [...ohlcData.flatMap(d=>[d.h,d.l]), ...e20.filter(Boolean), ...e50.filter(Boolean)];
-  if (fc) allY.push(...fc.pts.flatMap(p=>[p.upper,p.lower]));
+  if (cone) cone.forEach(c => allY.push(c.p95, c.p5));
   const yMin = Math.min(...allY), yMax = Math.max(...allY);
   const yPad = (yMax-yMin)*0.09 || Math.abs(yMin)*0.05 || 1;
   const yLo  = yMin-yPad, yHi = yMax+yPad, yRng = yHi-yLo||1;
 
-  const fcLen = fc ? fc.pts.length-1 : 0;
   const nBars = ohlcData.length + fcLen;
-
-  model = { closes, times, e20, e50, fc, yLo, yRng, nBars, fcLen };
+  model = { closes, times, e20, e50, cone, yLo, yRng, nBars, fcLen };
 }
 
 /* ─── Draw ───────────────────────────────────────────────────────────────────── */
@@ -375,7 +344,7 @@ function draw(hoverIdx) {
   const ph = H - PAD.top  - PAD.bottom;
   ctx2.clearRect(0, 0, W, H);
 
-  const { e20, e50, fc, yLo, yRng, nBars } = model;
+  const { e20, e50, cone, yLo, yRng, nBars } = model;
 
   _sx = i => PAD.left + (i/Math.max(nBars-1,1))*pw;
   _sy = v => PAD.top  + ph*(1-(v-yLo)/yRng);
@@ -389,13 +358,27 @@ function draw(hoverIdx) {
     ctx2.fillText(fmtPrice(v), W-PAD.right+6, y+4);
   }
 
-  // AI band (behind everything)
-  if (fc && fc.pts.length>1) {
+  // X axis time labels (always-on — grounds the chart in real time)
+  ctx2.fillStyle=TICK_C; ctx2.font='9px DM Mono,monospace'; ctx2.textAlign='center';
+  const xticks = 5;
+  for (let i=0;i<=xticks;i++) {
+    const idx = Math.round((ohlcData.length-1) * i/xticks);
+    const x = _sx(idx);
+    if (x > PAD.left+12 && x < W-PAD.right-12)
+      ctx2.fillText(fmtAxisTime(ohlcData[idx].t), x, H-PAD.bottom+13);
+  }
+
+  // Monte-Carlo cone (behind candles)
+  if (cone && cone.length>1) {
     const si = ohlcData.length-1;
-    ctx2.beginPath();
-    fc.pts.forEach((p,fi) => { const x=_sx(si+fi),y=_sy(p.upper); fi===0?ctx2.moveTo(x,y):ctx2.lineTo(x,y); });
-    for (let fi=fc.pts.length-1;fi>=0;fi--) ctx2.lineTo(_sx(si+fi),_sy(fc.pts[fi].lower));
-    ctx2.closePath(); ctx2.fillStyle='rgba(240,184,96,0.16)'; ctx2.fill();
+    const bandFill = (key1, key2, alpha) => {
+      ctx2.beginPath();
+      cone.forEach((p,fi) => { const x=_sx(si+fi),y=_sy(p[key1]); fi===0?ctx2.moveTo(x,y):ctx2.lineTo(x,y); });
+      for (let fi=cone.length-1;fi>=0;fi--) ctx2.lineTo(_sx(si+fi),_sy(cone[fi][key2]));
+      ctx2.closePath(); ctx2.fillStyle=`rgba(240,184,96,${alpha})`; ctx2.fill();
+    };
+    bandFill('p95','p5', 0.08);    // 90% interval
+    bandFill('p75','p25', 0.16);   // 50% interval
   }
 
   // EMAs
@@ -413,8 +396,8 @@ function draw(hoverIdx) {
     ctx2.fillStyle=col; ctx2.fillRect(x-barW/2, Math.min(yO,yC), barW, Math.max(1.5,Math.abs(yC-yO)));
   });
 
-  // AI projection (on top)
-  if (fc && fc.pts.length>1) {
+  // Median projection line + separator + label
+  if (cone && cone.length>1) {
     const si = ohlcData.length-1;
     const sepX = _sx(si);
 
@@ -423,23 +406,13 @@ function draw(hoverIdx) {
     ctx2.setLineDash([]); ctx2.restore();
 
     ctx2.fillStyle='rgba(240,184,96,0.6)'; ctx2.font='9px DM Mono,monospace'; ctx2.textAlign='center';
-    ctx2.fillText('▶  FORECAST', (sepX+(W-PAD.right))/2, PAD.top+13);
-
-    ctx2.save(); ctx2.strokeStyle='rgba(240,184,96,0.3)'; ctx2.lineWidth=1; ctx2.setLineDash([2,5]);
-    ['upper','lower'].forEach(k => {
-      ctx2.beginPath();
-      fc.pts.forEach((p,fi) => { const x=_sx(si+fi),y=_sy(p[k]); fi===0?ctx2.moveTo(x,y):ctx2.lineTo(x,y); });
-      ctx2.stroke();
-    });
-    ctx2.setLineDash([]); ctx2.restore();
+    ctx2.fillText('▶ MONTE CARLO', (sepX+(W-PAD.right))/2, PAD.top+13);
 
     ctx2.save();
-    ctx2.strokeStyle=AI_C; ctx2.lineWidth=2.5;
-    ctx2.shadowColor='rgba(240,184,96,0.55)'; ctx2.shadowBlur=8;
-    ctx2.setLineDash([9,5]);
+    ctx2.strokeStyle=AI_C; ctx2.lineWidth=2; ctx2.setLineDash([7,5]);
     ctx2.beginPath();
-    fc.pts.forEach((p,fi) => { const x=_sx(si+fi),y=_sy(p.v); fi===0?ctx2.moveTo(x,y):ctx2.lineTo(x,y); });
-    ctx2.stroke(); ctx2.setLineDash([]); ctx2.shadowBlur=0; ctx2.restore();
+    cone.forEach((p,fi) => { const x=_sx(si+fi),y=_sy(p.p50); fi===0?ctx2.moveTo(x,y):ctx2.lineTo(x,y); });
+    ctx2.stroke(); ctx2.setLineDash([]); ctx2.restore();
   }
 
   // Crosshair + pinned axis labels
@@ -502,55 +475,255 @@ function line(vals, color, width) {
   ctx2.stroke();
 }
 
-/* ─── Update AI insight text ────────────────────────────────────────────────── */
-function updateAIPanel(coin, coinId) {
-  document.getElementById('aiBadge').classList.toggle('on', aiEnabled);
-  document.getElementById('aiLegend').classList.toggle('on', aiEnabled);
-  if (!aiEnabled || !model || !model.fc) {
-    document.getElementById('aiInsight').classList.remove('on');
+/* ════════════════════════════════════════════════════════════════════════════
+ * ORACLE DASHBOARD RENDERING
+ * ════════════════════════════════════════════════════════════════════════════ */
+const pct  = (v, d=1) => `${v>=0?'+':''}${(v*100).toFixed(d)}%`;
+const pctP = (v, d=0) => `${(v*100).toFixed(d)}%`;            // unsigned probability
+const sc   = v => v > 0.15 ? 'bull' : v < -0.15 ? 'bear' : 'neutral';
+
+function scoreColor(s) { return `hsl(${Math.round(s*1.2)}, 65%, 55%)`; } // 0=red → 100=green
+
+function gaugeSVG(score, color) {
+  const cx=110, cy=112, r=92;
+  const a = (180 - score*1.8) * Math.PI/180;
+  const nx = cx + (r-14)*Math.cos(a), ny = cy - (r-14)*Math.sin(a);
+  const track = `M ${cx-r} ${cy} A ${r} ${r} 0 0 0 ${cx+r} ${cy}`;
+  return `
+  <svg class="gauge" viewBox="0 0 220 128" width="100%" height="100%">
+    <path d="${track}" pathLength="100" fill="none" stroke="#2a2a2a" stroke-width="14" stroke-linecap="round"/>
+    <path d="${track}" pathLength="100" fill="none" stroke="${color}" stroke-width="14" stroke-linecap="round"
+          stroke-dasharray="${score} 100"/>
+    <line x1="${cx}" y1="${cy}" x2="${nx}" y2="${ny}" stroke="${color}" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="${cx}" cy="${cy}" r="6" fill="${color}"/>
+    <text x="20" y="124" fill="#555" font-size="9" font-family="DM Mono">BEAR</text>
+    <text x="200" y="124" fill="#555" font-size="9" font-family="DM Mono" text-anchor="end">BULL</text>
+  </svg>`;
+}
+
+function probBar(p, dir) {
+  const col = dir > 0 ? 'var(--bull)' : 'var(--bear)';
+  return `<div class="pbar"><div class="pbar-fill" style="width:${Math.round(p*100)}%;background:${col}"></div></div>`;
+}
+
+function signalRow(s) {
+  const cls = sc(s.score);
+  const w = Math.round(Math.abs(s.score)*50);
+  const side = s.score >= 0 ? 'left:50%' : `right:50%;left:auto`;
+  const col = cls==='bull'?'var(--bull)':cls==='bear'?'var(--bear)':'var(--muted)';
+  return `
+  <div class="sig-row">
+    <div class="sig-name">${s.name}<em>${s.detail||''}</em></div>
+    <div class="sig-track">
+      <div class="sig-mid"></div>
+      <div class="sig-fill" style="width:${w}%;${side};background:${col}"></div>
+    </div>
+    <div class="sig-pill ${cls}">${s.score>0?'+':''}${(s.score*100).toFixed(0)}</div>
+  </div>`;
+}
+
+function metric(label, value, cls='') {
+  return `<div class="metric"><span class="m-label">${label}</span><span class="m-val ${cls}">${value}</span></div>`;
+}
+
+function hurstNote(H) {
+  if (H > 0.55) return 'persistent — trends tend to continue';
+  if (H < 0.45) return 'anti-persistent — reversals likely';
+  return 'random walk — little memory';
+}
+
+function renderOracle(res) {
+  const host = document.getElementById('oracle');
+  if (!res) {
+    host.innerHTML = `<div class="oracle-empty">Not enough candles for a full reading on this timeframe.
+      Try a longer timeframe.</div>`;
     return;
   }
-  const fc    = model.fc;
-  const closes= model.closes;
-  const lastC = closes[closes.length-1];
-  const endV  = fc.pts[fc.pts.length-1].v;
-  const chPct = ((endV-lastC)/lastC*100).toFixed(2);
-  const vol   = (fc.sigma*100).toFixed(3);
-  const trend = fc.slope>0 ? 'bullish' : 'bearish';
-  const str   = Math.abs(fc.slope/lastC*1000)>0.5 ? 'strong' : 'moderate';
-  document.getElementById('aiTxt').innerHTML =
-    `Based on <strong>${ohlcData.length} candles</strong> of ${TF_LABELS[currentTF]} price action,
-    the regression model detects a <strong>${str} ${trend} trend</strong> for ${coin?coin.name:coinId}.
-    Projected move over next <strong>${fc.fBars} bars</strong>:
-    <strong>${+chPct>0?'+':''}${chPct}%</strong>.
-    Per-bar volatility: <strong>${vol}%</strong> —
-    shaded area shows ±1σ confidence corridor.
-    ${Math.abs(+chPct)>5?'<br><strong style="color:var(--bear)">⚠ High momentum — elevated risk.</strong>':''}
-    <br><br><em style="color:#555">Statistical projection only — not financial advice.</em>`;
-  document.getElementById('aiInsight').classList.add('on');
+  const C = res.composite, col = scoreColor(C.score);
+  const P = res.probs, R = res.risk, S = res.stats, V = res.volatility, T = res.trend;
+  const hSlope = T.slopePct;
+
+  // probability ladder rows
+  const ladder = P.targets.map(t => `
+    <div class="prob-row">
+      <span class="prob-lbl">${t.label}</span>
+      ${probBar(t.p, t.dir)}
+      <span class="prob-val">${pctP(t.p)}<em>touch ${pctP(t.touch)}</em></span>
+    </div>`).join('');
+
+  host.innerHTML = `
+  <div class="oracle-grid">
+
+    <!-- VERDICT -->
+    <div class="ocard verdict">
+      <div class="ocard-title">Oracle Verdict</div>
+      <div class="gauge-wrap">${gaugeSVG(C.score, col)}
+        <div class="gauge-num" style="color:${col}">${C.score}</div>
+      </div>
+      <div class="verdict-label" style="color:${col}">${C.label}</div>
+      <div class="verdict-conf">Confidence <strong>${C.confidence}%</strong> · ${res.meta.bars} candles</div>
+      <div class="verdict-regime">${res.regime.label}</div>
+    </div>
+
+    <!-- PROBABILITIES -->
+    <div class="ocard">
+      <div class="ocard-title">Forecast Probabilities <span class="ttag">${res.meta.horizon} bars · ${res.mc.paths.toLocaleString()} sims</span></div>
+      <div class="prob-head">
+        <div class="prob-big ${P.pUp>=0.5?'bull':'bear'}">${pctP(P.pUp)}<small>chance up</small></div>
+        <div class="prob-big ${P.pUp<0.5?'bear':'neutral'}">${pctP(1-P.pUp)}<small>chance down</small></div>
+      </div>
+      <div class="prob-stats">
+        ${metric('Expected move', pct(P.expRet,2), P.expRet>=0?'bull':'bear')}
+        ${metric('Median move', pct(P.medRet,2), P.medRet>=0?'bull':'bear')}
+        ${metric('90% range', `${pct(P.rangeLo,1)} … ${pct(P.rangeHi,1)}`)}
+      </div>
+      <div class="prob-ladder">${ladder}</div>
+    </div>
+
+    <!-- SIGNAL MATRIX -->
+    <div class="ocard wide">
+      <div class="ocard-title">Signal Matrix <span class="ttag">8 weighted factors fused into the verdict</span></div>
+      <div class="sig-list">${res.signals.map(signalRow).join('')}</div>
+    </div>
+
+    <!-- RISK -->
+    <div class="ocard">
+      <div class="ocard-title">Risk Profile</div>
+      <div class="metric-grid">
+        ${metric('Volatility (ann.)', pctP(V.annVol,0))}
+        ${metric('ATR', V.atrPct!=null?V.atrPct.toFixed(2)+'%':'—')}
+        ${metric('VaR 95% (1 bar)', pctP(R.var95,2), 'bear')}
+        ${metric('CVaR 95%', pctP(R.cvar95,2), 'bear')}
+        ${metric('Max drawdown', pctP(R.maxDrawdown,1), 'bear')}
+        ${metric('Sharpe (ann.)', R.sharpe.toFixed(2), R.sharpe>=0?'bull':'bear')}
+        ${metric('Sortino (ann.)', R.sortino.toFixed(2), R.sortino>=0?'bull':'bear')}
+        ${metric('Return (ann.)', pct(R.annRet,0), R.annRet>=0?'bull':'bear')}
+      </div>
+    </div>
+
+    <!-- STATISTICAL FINGERPRINT -->
+    <div class="ocard">
+      <div class="ocard-title">Statistical Fingerprint</div>
+      <div class="metric-grid">
+        ${metric('Hurst exponent', S.hurst.toFixed(3))}
+        ${metric('Trend slope', `${hSlope>=0?'+':''}${hSlope.toFixed(3)}%/bar`, hSlope>=0?'bull':'bear')}
+        ${metric('Skewness', S.skew.toFixed(3), S.skew>=0?'bull':'bear')}
+        ${metric('Excess kurtosis', S.kurtosis.toFixed(2))}
+        ${metric('Autocorr (lag 1)', S.autocorr.toFixed(3))}
+        ${metric('Z-score', `${S.zScore>=0?'+':''}${S.zScore.toFixed(2)}σ`)}
+      </div>
+      <div class="fingerprint-note">H = ${S.hurst.toFixed(2)} → ${hurstNote(S.hurst)}.
+        Fat tails: ${S.kurtosis>1?'pronounced':'mild'} (kurt ${S.kurtosis.toFixed(1)}).</div>
+    </div>
+
+    <!-- DISTRIBUTION -->
+    <div class="ocard wide">
+      <div class="ocard-title">Projected Price Distribution <span class="ttag">terminal outcomes at horizon</span></div>
+      <div class="dist-wrap"><canvas id="distCv"></canvas></div>
+      <div class="dist-legend">
+        <span><i style="background:var(--bull)"></i>upside</span>
+        <span><i style="background:var(--bear)"></i>downside</span>
+        <span><i style="background:#fff;opacity:.5"></i>current price</span>
+        <span><i style="background:var(--accent2)"></i>median</span>
+      </div>
+    </div>
+
+  </div>
+  <div class="oracle-disclaimer">⚠ Quantitative model output — statistical estimates from historical price only, <strong>not financial advice</strong>. Crypto is volatile; models can be confidently wrong.</div>`;
+
+  drawDistribution(res);
+}
+
+/* Histogram of Monte-Carlo terminal prices. */
+function drawDistribution(res) {
+  const canvas = document.getElementById('distCv');
+  if (!canvas) return;
+  const host = canvas.parentElement;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const W = host.clientWidth, H = 150;
+  canvas.width = W*dpr; canvas.height = H*dpr;
+  canvas.style.width = W+'px'; canvas.style.height = H+'px';
+  const c = canvas.getContext('2d');
+  c.setTransform(dpr,0,0,dpr,0,0);
+  c.clearRect(0,0,W,H);
+
+  const term = res.mc.terminals;          // already sorted
+  const price = res.meta.price;
+  const lo = term[Math.floor(term.length*0.01)], hi = term[Math.floor(term.length*0.99)];
+  const span = (hi-lo)||1;
+  const bins = 36;
+  const counts = new Array(bins).fill(0);
+  for (const v of term) {
+    if (v < lo || v > hi) continue;
+    let b = Math.floor((v-lo)/span*bins); if (b>=bins) b=bins-1; if (b<0) b=0;
+    counts[b]++;
+  }
+  const maxC = Math.max(...counts) || 1;
+  const bw = W/bins;
+  const median = term[Math.floor(term.length*0.5)];
+  const xOf = v => (v-lo)/span*W;
+
+  // bars
+  for (let i=0;i<bins;i++) {
+    const h = counts[i]/maxC * (H-22);
+    const binCenter = lo + (i+0.5)/bins*span;
+    c.fillStyle = binCenter >= price ? 'rgba(200,240,96,0.55)' : 'rgba(255,107,107,0.55)';
+    c.fillRect(i*bw+1, H-18-h, bw-2, h);
+  }
+  // current price marker
+  const px = xOf(price);
+  if (px>=0 && px<=W) {
+    c.strokeStyle='rgba(255,255,255,0.55)'; c.lineWidth=1.5; c.setLineDash([3,3]);
+    c.beginPath(); c.moveTo(px,4); c.lineTo(px,H-18); c.stroke(); c.setLineDash([]);
+  }
+  // median marker
+  const mx = xOf(median);
+  if (mx>=0 && mx<=W) {
+    c.strokeStyle='#f0b860'; c.lineWidth=2;
+    c.beginPath(); c.moveTo(mx,4); c.lineTo(mx,H-18); c.stroke();
+  }
+  // x labels
+  c.fillStyle='#666'; c.font='9px DM Mono,monospace'; c.textAlign='center';
+  c.fillText(fmtPrice(lo), 22, H-5);
+  c.fillText(fmtPrice(median), W/2, H-5);
+  c.fillText(fmtPrice(hi), W-26, H-5);
+}
+
+/* ─── Compute Oracle + re-render dashboard + rebuild chart model ────────────── */
+function analyzeAndRender() {
+  oracle = (ohlcData.length >= 30 && window.Oracle) ? Oracle.analyze(ohlcData) : null;
+  renderOracle(oracle);
+  document.getElementById('aiBadge').classList.toggle('on', coneOn);
+  rebuildModel();
 }
 
 /* ─── Load chart (full load, with spinner) ──────────────────────────────────── */
-async function loadChart() {
+async function loadChart({ force = false } = {}) {
   const coinId = document.getElementById('coinSelect').value;
   if (!coinId) return;
 
-  const myReq = ++reqId;            // claim this request
+  const myReq = ++reqId;
   stopAutoRefresh();
   savePrefs();
+  lastPrice = null;                       // reset so the price flash isn't misleading across coins
   const coin = coins.find(c => c.id === coinId);
 
   setLoading(coin ? coin.name : coinId);
-  if (coin) refreshBar(coin, true); // show price/change immediately, shimmer stats
+  if (coin) refreshBar(coin, true);
 
   document.getElementById('tfLabel').innerHTML =
     `Timeframe <strong>${TF_LABELS[currentTF]}</strong>`;
 
-  let data;
+  let data, market;
   try {
-    data = await fetchOHLC(coinId, currentTF);
+    // Always pull a fresh market snapshot for the selected coin so switching
+    // back to a coin never shows a stale price; candles use cache unless forced.
+    [data, market] = await Promise.all([
+      fetchOHLC(coinId, currentTF, { fresh: force }),
+      fetchCoinMarket(coinId).catch(() => null),
+    ]);
   } catch (e) {
-    if (myReq !== reqId) return;     // a newer request superseded us — bail quietly
+    if (myReq !== reqId) return;
     console.error('OHLC fetch failed:', e);
     showError(e.rateLimited
       ? 'CoinGecko rate limit hit. Wait a moment, then retry.'
@@ -558,16 +731,16 @@ async function loadChart() {
     return;
   }
 
-  if (myReq !== reqId) return;       // stale response — discard
+  if (myReq !== reqId) return;
 
   ohlcData = data;
+  if (market && coin) Object.assign(coin, market);
   if (coin) refreshBar(coin, false);
 
   sizeCanvas();
-  rebuildModel();
+  analyzeAndRender();
   draw();
   clearLoading();
-  updateAIPanel(coin, coinId);
 
   lastUpdated = Date.now();
   setLive('', 'Live · just now');
@@ -579,30 +752,27 @@ async function refreshLive() {
   const coinId = document.getElementById('coinSelect').value;
   if (!coinId || isFetching || document.hidden) return;
 
-  const myReq = reqId;               // piggyback on current request generation
+  const myReq = reqId;
   setLive('syncing', 'Updating…');
   try {
-    // Fetch fresh candles + latest price in parallel.
     const [data, market] = await Promise.all([
       fetchOHLC(coinId, currentTF, { fresh: true }),
       fetchCoinMarket(coinId).catch(() => null)
     ]);
-    if (myReq !== reqId) return;     // user switched coin/TF mid-flight
+    if (myReq !== reqId) return;
 
     ohlcData = data;
     const coin = coins.find(c => c.id === coinId);
     if (market && coin) Object.assign(coin, market);
     if (coin) refreshBar(coin, false);
 
-    rebuildModel();
+    analyzeAndRender();
     requestDraw();
-    updateAIPanel(coin, coinId);
 
     lastUpdated = Date.now();
     setLive('', 'Live · just now');
   } catch (e) {
     if (myReq !== reqId) return;
-    // Background failure — keep showing existing data, just flag staleness.
     setLive('stale', 'Reconnecting…');
     if (e.rateLimited) toast('Rate limited — backing off live updates.');
   }
@@ -617,12 +787,10 @@ function stopAutoRefresh() {
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
 }
 
-// Pause polling when tab is hidden; refresh immediately when it returns.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     stopAutoRefresh();
   } else if (ohlcData.length) {
-    // If data is stale on return, refresh right away then resume cadence.
     if (Date.now() - lastUpdated > 15000) refreshLive();
     startAutoRefresh();
   }
@@ -630,7 +798,7 @@ document.addEventListener('visibilitychange', () => {
 
 /* ─── Crosshair / tooltip — rAF-throttled for smoothness ─────────────────────── */
 const tooltip = document.getElementById('tooltip');
-let pendingHover = null;   // {x, y} or 'clear'
+let pendingHover = null;
 let rafQueued = false;
 
 function requestDraw(hoverIdx) {
@@ -673,11 +841,8 @@ function renderHover(clientX, clientY) {
 function onPointer(clientX, clientY) { pendingHover = { x: clientX, y: clientY }; requestDraw(); }
 function clearHover() { pendingHover = 'clear'; requestDraw(); }
 
-// Mouse
 cv.addEventListener('mousemove', e => onPointer(e.clientX, e.clientY));
 cv.addEventListener('mouseleave', clearHover);
-
-// Touch
 cv.addEventListener('touchmove', e => {
   e.preventDefault();
   const t = e.touches[0];
@@ -687,7 +852,7 @@ cv.addEventListener('touchend', clearHover);
 cv.addEventListener('touchcancel', clearHover);
 
 /* ─── Events ─────────────────────────────────────────────────────────────────── */
-document.getElementById('coinSelect').addEventListener('change', loadChart);
+document.getElementById('coinSelect').addEventListener('change', () => loadChart());
 
 document.querySelectorAll('input[name="tf"]').forEach(r =>
   r.addEventListener('change', e => { currentTF = +e.target.value; loadChart(); })
@@ -695,28 +860,27 @@ document.querySelectorAll('input[name="tf"]').forEach(r =>
 
 document.getElementById('aiToggle').addEventListener('click', () => {
   if (isFetching) return;
-  aiEnabled = !aiEnabled;
-  document.getElementById('aiToggle').classList.toggle('active', aiEnabled);
+  coneOn = !coneOn;
+  document.getElementById('aiToggle').classList.toggle('active', coneOn);
+  document.getElementById('aiBadge').classList.toggle('on', coneOn);
   savePrefs();
-  if (ohlcData.length) {
-    // No network needed — just recompute the model and redraw.
-    rebuildModel();
-    requestDraw();
-    const coinId = document.getElementById('coinSelect').value;
-    updateAIPanel(coins.find(c => c.id === coinId), coinId);
-  }
+  if (ohlcData.length) { rebuildModel(); requestDraw(); }
+});
+
+document.getElementById('refreshBtn').addEventListener('click', () => {
+  if (isFetching) return;
+  loadChart({ force: true });   // force-bypass cache for both candles + price
 });
 
 document.getElementById('retryBtn').addEventListener('click', () => {
   if (!coins.length) boot();
-  else loadChart();
+  else loadChart({ force: true });
 });
 
-// Debounced resize so dragging the window doesn't thrash redraws.
 let resizeTimer = null;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { sizeCanvas(); draw(); }, 120);
+  resizeTimer = setTimeout(() => { sizeCanvas(); draw(); if (oracle) drawDistribution(oracle); }, 120);
 });
 
 /* ─── Formatters ─────────────────────────────────────────────────────────────── */
@@ -738,6 +902,11 @@ function fmtBig(n) {
   if (n>=1e9)  return '$'+(n/1e9).toFixed(2)+'B';
   if (n>=1e6)  return '$'+(n/1e6).toFixed(2)+'M';
   return '$'+n.toLocaleString();
+}
+function fmtAxisTime(ts) {
+  const d = new Date(ts);
+  if (currentTF <= 4) return d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+  return d.toLocaleDateString([], { month:'short', day:'numeric' });
 }
 function fmtFull(ts) {
   return new Date(ts).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});

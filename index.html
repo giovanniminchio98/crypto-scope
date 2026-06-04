@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>CryptoScope — Live Chart</title>
-<meta name="description" content="Real-time crypto candlestick charts for the top 20 coins by market cap, with EMAs and an AI trend overlay. Data via CoinGecko."/>
+<title>CryptoScope — The Crypto Oracle</title>
+<meta name="description" content="A crypto oracle: real-time candlestick charts plus Monte-Carlo probability forecasts, regime detection, and quant risk analytics for the top 20 coins. Data via CoinGecko."/>
 <link rel="preconnect" href="https://api.coingecko.com"/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
@@ -14,104 +14,132 @@
 <div class="wrapper">
 
   <header>
-    <div class="eyebrow"><span class="live-pip"></span> Live Markets</div>
+    <div class="eyebrow"><span class="live-pip"></span> Live Markets · Quant Oracle</div>
     <h1>Crypto<span>Scope</span></h1>
-    <p class="subtitle">Real-time candlestick charts · Top 20 by market cap · AI trend overlay</p>
+    <p class="subtitle">Real-time candlesticks · Monte-Carlo probability forecasts · regime &amp; risk analytics</p>
   </header>
 
-  <!-- Controls -->
-  <div class="controls">
-    <div class="select-wrap">
-      <select id="coinSelect"><option value="">Loading coins…</option></select>
-    </div>
-    <div class="tf-group" id="tfGroup">
-      <input type="radio" name="tf" id="tf1h" value="1" checked><label for="tf1h">1H</label>
-      <input type="radio" name="tf" id="tf4h" value="4"><label for="tf4h">4H</label>
-      <input type="radio" name="tf" id="tf1d" value="24"><label for="tf1d">1D</label>
-      <input type="radio" name="tf" id="tf1w" value="168"><label for="tf1w">1W</label>
-    </div>
-    <div class="ai-toggle" id="aiToggle">
-      <div class="ai-dot"></div>
-      <span class="ai-label">AI Trend</span>
-    </div>
-  </div>
-
-  <!-- Status / coin info bar -->
-  <div class="status-bar" id="statusBar">
-    <div class="coin-name" id="coinName">—</div>
-    <div class="coin-price" id="coinPrice">$—</div>
-    <div class="coin-change" id="coinChange">—</div>
-
-    <!-- Fetch indicator — visible only while loading -->
-    <div class="fetch-indicator" id="fetchIndicator">
-      <div class="fetch-dots">
-        <span></span><span></span><span></span>
+  <!-- ════════ SECTION 1 · CONTROLS ════════ -->
+  <section class="block">
+    <div class="block-head"><span class="block-kicker">01</span> Select market</div>
+    <div class="controls">
+      <div class="select-wrap">
+        <select id="coinSelect"><option value="">Loading coins…</option></select>
       </div>
-      Fetching chart data
-    </div>
-
-    <div class="coin-bar-right" id="coinBarRight">
-      <div class="coin-stat">Vol 24h<span id="coinVol">—</span></div>
-      <div class="coin-stat">Mkt Cap<span id="coinMcap">—</span></div>
-      <div class="coin-stat">High 24h<span id="coinHigh">—</span></div>
-      <div class="coin-stat">Low 24h<span id="coinLow">—</span></div>
-    </div>
-  </div>
-
-  <!-- Chart -->
-  <div class="chart-card">
-    <div class="chart-header">
-      <div class="section-label">Candlestick Chart</div>
-      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-        <div class="live-tag syncing" id="liveTag"><span class="dot"></span><span id="liveTxt">Connecting…</span></div>
-        <div class="tf-label" id="tfLabel">Timeframe <strong>1H</strong></div>
-        <div class="ai-badge" id="aiBadge"><div class="ai-badge-dot"></div>AI Active</div>
+      <div class="tf-group" id="tfGroup">
+        <input type="radio" name="tf" id="tf1h" value="1" checked><label for="tf1h">1H</label>
+        <input type="radio" name="tf" id="tf4h" value="4"><label for="tf4h">4H</label>
+        <input type="radio" name="tf" id="tf1d" value="24"><label for="tf1d">1D</label>
+        <input type="radio" name="tf" id="tf1w" value="168"><label for="tf1w">1W</label>
+      </div>
+      <button class="refresh-btn" id="refreshBtn" title="Refresh price &amp; candles">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        <span>Refresh</span>
+      </button>
+      <div class="ai-toggle" id="aiToggle" title="Overlay the Monte-Carlo probability cone on the chart">
+        <div class="ai-dot"></div>
+        <span class="ai-label">Forecast Cone</span>
       </div>
     </div>
+  </section>
 
-    <div class="chart-wrap" id="chartWrap">
-      <!-- Loading overlay — shows coin name while waiting -->
-      <div class="loading" id="loading">
-        <div class="skel-bars" id="skelBars"></div>
-        <div class="loading-ring"></div>
-        <div class="err-icon">⚠</div>
-        <div class="loading-coin" id="loadingCoinName">—</div>
-        <div class="loading-msg">
-          Loading chart data
-          <div class="dots"><span></span><span></span><span></span></div>
+  <!-- ════════ SECTION 2 · MARKET SNAPSHOT ════════ -->
+  <section class="block">
+    <div class="block-head"><span class="block-kicker">02</span> Market snapshot</div>
+    <div class="status-bar" id="statusBar">
+      <div class="coin-name" id="coinName">—</div>
+      <div class="coin-price" id="coinPrice">$—</div>
+      <div class="coin-change" id="coinChange">—</div>
+
+      <div class="fetch-indicator" id="fetchIndicator">
+        <div class="fetch-dots"><span></span><span></span><span></span></div>
+        Fetching chart data
+      </div>
+
+      <div class="coin-bar-right" id="coinBarRight">
+        <div class="coin-stat">Vol 24h<span id="coinVol">—</span></div>
+        <div class="coin-stat">Mkt Cap<span id="coinMcap">—</span></div>
+        <div class="coin-stat">High 24h<span id="coinHigh">—</span></div>
+        <div class="coin-stat">Low 24h<span id="coinLow">—</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ SECTION 3 · CHART ════════ -->
+  <section class="block">
+    <div class="block-head"><span class="block-kicker">03</span> Price chart</div>
+    <div class="chart-card">
+      <div class="chart-header">
+        <div class="section-label">Candlestick</div>
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          <div class="live-tag syncing" id="liveTag"><span class="dot"></span><span id="liveTxt">Connecting…</span></div>
+          <div class="tf-label" id="tfLabel">Timeframe <strong>1H</strong></div>
+          <div class="ai-badge" id="aiBadge"><div class="ai-badge-dot"></div>Cone On</div>
         </div>
-        <div class="err-msg" id="errMsg">Couldn't reach the market data service.</div>
-        <button class="retry-btn" id="retryBtn">Retry</button>
       </div>
-      <canvas id="cv"></canvas>
-      <div id="tooltip"></div>
-    </div>
 
-    <div class="ai-legend" id="aiLegend">
-      <div class="legend-item"><div class="leg-line" style="background:var(--bull)"></div>Bullish candle</div>
-      <div class="legend-item"><div class="leg-line" style="background:var(--bear)"></div>Bearish candle</div>
-      <div class="legend-item"><div class="leg-line" style="background:rgba(200,240,96,0.8)"></div>EMA 20</div>
-      <div class="legend-item"><div class="leg-line" style="background:rgba(96,200,240,0.8)"></div>EMA 50</div>
-      <div class="legend-item"><div class="leg-dash"></div>AI Projection</div>
-      <div class="legend-item"><div class="leg-band"></div>Confidence Band ±1σ</div>
-    </div>
+      <div class="chart-wrap" id="chartWrap">
+        <div class="loading" id="loading">
+          <div class="skel-bars" id="skelBars"></div>
+          <div class="loading-ring"></div>
+          <div class="err-icon">⚠</div>
+          <div class="loading-coin" id="loadingCoinName">—</div>
+          <div class="loading-msg">
+            Loading chart data
+            <div class="dots"><span></span><span></span><span></span></div>
+          </div>
+          <div class="err-msg" id="errMsg">Couldn't reach the market data service.</div>
+          <button class="retry-btn" id="retryBtn">Retry</button>
+        </div>
+        <canvas id="cv"></canvas>
+        <div id="tooltip"></div>
+      </div>
 
-    <div class="ai-insight" id="aiInsight">
-      <div class="ai-insight-title"><div class="ai-badge-dot"></div>AI Analysis</div>
-      <p id="aiTxt">—</p>
+      <div class="chart-legend">
+        <div class="legend-item"><div class="leg-line" style="background:var(--bull)"></div>Bullish</div>
+        <div class="legend-item"><div class="leg-line" style="background:var(--bear)"></div>Bearish</div>
+        <div class="legend-item"><div class="leg-line" style="background:rgba(200,240,96,0.8)"></div>EMA 20</div>
+        <div class="legend-item"><div class="leg-line" style="background:rgba(96,200,240,0.8)"></div>EMA 50</div>
+        <div class="legend-item"><div class="leg-dash"></div>MC median</div>
+        <div class="legend-item"><div class="leg-band"></div>50% / 90% cone</div>
+      </div>
     </div>
-  </div>
+  </section>
 
-  <footer>CryptoScope · Data via CoinGecko · AI projections are statistical estimates, not financial advice.</footer>
+  <!-- ════════ SECTION 4 · THE ORACLE ════════ -->
+  <section class="block">
+    <div class="block-head oracle-head"><span class="block-kicker">04</span> The Oracle
+      <span class="block-sub">probabilistic &amp; quantitative reading</span></div>
+    <div id="oracle" class="oracle"><div class="oracle-empty">Awaiting data…</div></div>
+  </section>
+
+  <footer>
+    <div class="socials" id="socials">
+      <!-- Social links (edit href values to your handles) -->
+      <a class="social" href="#" aria-label="X / Twitter" target="_blank" rel="noopener" data-net="x">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+      </a>
+      <a class="social" href="#" aria-label="Instagram" target="_blank" rel="noopener" data-net="ig">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1.2" fill="currentColor" stroke="none"/></svg>
+      </a>
+      <a class="social" href="#" aria-label="Telegram" target="_blank" rel="noopener" data-net="tg">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M21.94 4.62 18.6 20.36c-.25 1.1-.91 1.37-1.84.85l-5.09-3.75-2.46 2.37c-.27.27-.5.5-1.02.5l.36-5.18 9.43-8.52c.41-.36-.09-.56-.63-.2L5.06 13.18l-5.02-1.57c-1.09-.34-1.11-1.09.23-1.61l19.6-7.56c.91-.34 1.71.2 1.41 1.78z" transform="translate(1 0)"/></svg>
+      </a>
+      <a class="social" href="#" aria-label="GitHub" target="_blank" rel="noopener" data-net="gh">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58v-2.2c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.21.09 1.84 1.24 1.84 1.24 1.07 1.84 2.81 1.31 3.5 1 .11-.78.42-1.31.76-1.61-2.67-.3-5.47-1.34-5.47-5.95 0-1.31.47-2.39 1.24-3.23-.13-.3-.54-1.52.12-3.17 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.65.25 2.87.12 3.17.77.84 1.24 1.92 1.24 3.23 0 4.62-2.81 5.64-5.49 5.94.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.57C20.56 22.3 24 17.8 24 12.5 24 5.87 18.63.5 12 .5z"/></svg>
+      </a>
+    </div>
+    <div class="foot-note">CryptoScope · Data via CoinGecko · Quant models are statistical estimates, not financial advice.</div>
+  </footer>
 </div>
 
 <div class="toast" id="toast"></div>
 
 <!--
   Optional: raise CoinGecko rate limits with a free Demo API key.
-  Uncomment and paste your key (get one at https://www.coingecko.com/en/api):
   <script>window.CRYPTOSCOPE_CONFIG = { apiKey: 'CG-your-demo-key' };</script>
 -->
+<script src="oracle.js" defer></script>
 <script src="app.js" defer></script>
 </body>
 </html>
