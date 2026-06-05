@@ -406,8 +406,8 @@ async function fetchHistory(coinId) {
   const arr = raw && raw.Data && raw.Data.Data;
   if (!Array.isArray(arr)) throw new Error('No history');
   const out = arr.filter(d => d && d.close > 0).map(d => ({ t: d.time * 1000, price: +d.close }));
-  if (out.length < 220) throw new Error('Insufficient history');
-  return out;
+  if (!out.length) throw new Error('No history');   // symbol not listed on the provider
+  return out;                                       // may be short — caller measures span
 }
 
 /* ─── EMA (for chart overlay lines only — Oracle computes its own) ──────────── */
@@ -561,26 +561,40 @@ function renderSimpleInner(res) {
 async function loadSeasonal(coinId) {
   const myReq = reqId;
   const coin = coins.find(c => c.id === coinId);
+  const name = coin ? coin.name : coinId;
   try {
     const hist = await fetchHistory(coinId);
     if (myReq !== reqId) return;
-    seasonal = window.Seasonal ? Seasonal.analyze(hist, { isBTC: coinId === 'bitcoin', coinName: coin ? coin.name : coinId }) : null;
+    seasonal = window.Seasonal ? Seasonal.analyze(hist, { isBTC: coinId === 'bitcoin', coinName: name }) : null;
     seasonalCoin = coinId;
-    renderSeasonal(seasonal);
+    if (seasonal) { renderSeasonal(seasonal); return; }
+    // Have history, but not enough for a seasonal read — explain why.
+    const years = hist.length ? (hist[hist.length-1].t - hist[0].t) / (365*86400000) : 0;
+    renderSeasonal(null, { kind: years < 2 ? 'tooNew' : 'tooFew', years, name });
   } catch (e) {
     if (myReq !== reqId) return;
     seasonal = null; seasonalCoin = coinId;
-    renderSeasonal(null);
+    renderSeasonal(null, { kind: 'error', name });
   }
 }
 
-function renderSeasonal(s) {
+function renderSeasonal(s, info) {
   const host = document.getElementById('seasonalCard');
   if (!host) return;
   if (!s) {
+    const name = (info && info.name) || 'this coin';
+    let msg;
+    if (info && info.kind === 'error') {
+      msg = `Couldn’t load price history for <b>${name}</b> — it may not be listed on the history provider.`;
+    } else if (info && info.kind === 'tooNew') {
+      const span = info.years < 1 ? `${Math.max(1, Math.round(info.years*12))} months` : `${info.years.toFixed(1)} years`;
+      msg = `⏳ <b>Not available yet — ${name} is too new.</b><br>We only have about ${span} of price history, and a seasonal read needs at least ~2 years of data to compare cycles.`;
+    } else {
+      msg = `Not enough complete cycles yet for a reliable seasonal read on <b>${name}</b>.`;
+    }
     host.innerHTML = `<div class="ocard-title">Seasonal Pattern</div>
-      ${odesc('How this coin behaved at this point in past cycles.', 'Needs enough history — not available for this coin yet.')}
-      <div class="seasonal-msg">No usable seasonal history for this asset.</div>`;
+      ${odesc('How this coin behaved at this point in past cycles.', 'Overlay of past cycles + a typical-path projection & target.')}
+      <div class="seasonal-msg">${msg}</div>`;
     return;
   }
   const tgtCls = s.projection.targetPct >= 0 ? 'bull' : 'bear';
