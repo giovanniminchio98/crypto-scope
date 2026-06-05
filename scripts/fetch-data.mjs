@@ -12,7 +12,7 @@
  *   data/history/<id>.json       — { prices: [[tsMs, price], ...] } (weekly)
  *   data/meta.json               — { generatedAt, coins, ok, fail }
  * ───────────────────────────────────────────────────────────────────────────── */
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
 
 const CG  = 'https://api.coingecko.com/api/v3';
 const KEY = process.env.CG_KEY || '';
@@ -38,21 +38,33 @@ async function getJSON(url, { tries = 4, noKey = false } = {}) {
 async function main() {
   await mkdir(OUT, { recursive: true });
 
+  // Carry-forward: reuse the previous bundle for anything that fails this run, so
+  // the published bundle is always complete (no gaps → no switch errors).
+  let prev = { markets: [], ohlc: {}, history: {} };
+  try { prev = JSON.parse(await readFile(`${OUT}/bundle.json`, 'utf8')); } catch (e) { /* first run */ }
+
   console.log('Fetching markets…');
-  const markets = await getJSON(`${CG}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`);
+  let markets;
+  try { markets = await getJSON(`${CG}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`); }
+  catch (e) { console.error('markets fail, reusing previous:', e.message); markets = prev.markets; }
+  if (!Array.isArray(markets) || !markets.length) throw new Error('No markets and no previous bundle');
   const ids = markets.map(c => c.id);
 
   // One bundle holds everything for every coin → the site loads it once.
   const bundle = { generatedAt: Date.now(), intervalHours: 6, coins: ids, markets, ohlc: {}, history: {} };
 
-  let ok = 0, fail = 0;
+  let ok = 0, fail = 0, carried = 0;
   for (const c of markets) {
     bundle.ohlc[c.id] = {};
     for (const [tf, days] of Object.entries(TF_DAYS)) {
       try {
         bundle.ohlc[c.id][tf] = await getJSON(`${CG}/coins/${c.id}/ohlc?vs_currency=usd&days=${days}`);
         ok++;
-      } catch (e) { console.error('  OHLC fail', c.id, tf, e.message); fail++; }
+      } catch (e) {
+        const old = prev.ohlc && prev.ohlc[c.id] && prev.ohlc[c.id][tf];
+        if (old) { bundle.ohlc[c.id][tf] = old; carried++; }
+        else { console.error('  OHLC fail (no carry-forward)', c.id, tf, e.message); fail++; }
+      }
       await sleep(2400);  // stay well under the demo-tier rate limit
     }
     // Long history from CryptoCompare (keyless), downsampled to weekly to keep the bundle lean.
@@ -61,13 +73,16 @@ async function main() {
       const cc = await getJSON(`https://min-api.cryptocompare.com/data/v2/histoday?fsym=${encodeURIComponent(sym)}&tsym=USD&allData=true`, { noKey: true });
       const arr = (cc && cc.Data && cc.Data.Data) || [];
       bundle.history[c.id] = arr.filter((d, i) => d && d.close > 0 && i % 7 === 0).map(d => [d.time * 1000, +d.close]);
-    } catch (e) { console.error('  history fail', c.id, e.message); }
+    } catch (e) {
+      if (prev.history && prev.history[c.id]) { bundle.history[c.id] = prev.history[c.id]; carried++; }
+      else console.error('  history fail (no carry-forward)', c.id, e.message);
+    }
     await sleep(1200);
   }
 
   await writeFile(`${OUT}/bundle.json`, JSON.stringify(bundle));
   await writeFile(`${OUT}/meta.json`, JSON.stringify({ generatedAt: bundle.generatedAt, intervalHours: 6, coins: ids, ok, fail }));
-  console.log(`Done. OHLC ok=${ok} fail=${fail}, ${ids.length} coins → data/bundle.json`);
+  console.log(`Done. OHLC ok=${ok} fail=${fail} carried=${carried}, ${ids.length} coins → data/bundle.json`);
 }
 
 main().catch(e => { console.error(e); process.exit(1); });
