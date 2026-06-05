@@ -542,7 +542,7 @@ function renderOracle(res) {
       <div class="gauge-wrap">${gaugeSVG(C.score, col)}</div>
       <div class="gauge-ends"><span class="ge-bear">◀ Bear</span><span class="ge-bull">Bull ▶</span></div>
       <div class="verdict-label" style="color:${col}">${C.label}</div>
-      <div class="verdict-conf">Confidence <strong>${C.confidence}%</strong> · ${res.meta.bars} candles</div>
+      <div class="verdict-conf" title="How much the 8 signals agree with each other and how strong they are — not the same as the score. Low = signals conflict / weak; high = aligned & strong.">Confidence <strong>${C.confidence}%</strong> · ${res.meta.bars} candles</div>
       <div class="verdict-regime">${res.regime.label}</div>
       <div class="tf-mini-title">Verdict by timeframe</div>
       <div class="tf-mini" id="tfMini">${[1,4,24,168].map(tf => miniRing(tf, tfScores[tf])).join('')}</div>

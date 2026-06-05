@@ -339,13 +339,25 @@ const Oracle = (function () {
       `μ ${(mc.mu * 100).toFixed(3)}%/bar · H ${H.toFixed(2)}`));
 
     // ── composite verdict ──
-    // weight signals; confidence = net conviction relative to total weight
+    // Weighted fusion. The score is the net direction; confidence is a separate
+    // read of how much the signals AGREE and how strong they are (so it isn't
+    // just a restatement of |score-50|).
     const weights = { trend: 1.4, slope: 0.9, macd: 1.0, rsi: 0.9, stoch: 0.6, boll: 0.7, z: 0.8, mc: 1.3 };
-    let wSum = 0, wAbs = 0;
-    for (const s of signals) { const w = weights[s.key] || 1; wSum += w * s.score; wAbs += w; }
-    const norm = wAbs ? wSum / wAbs : 0;            // -1..1
+    let wSum = 0, wAbs = 0, wSign = 0, wMag = 0;
+    for (const s of signals) {
+      const w = weights[s.key] || 1;
+      wSum  += w * s.score;
+      wAbs  += w;
+      wSign += w * Math.sign(s.score);   // directional vote
+      wMag  += w * Math.abs(s.score);    // conviction
+    }
+    const norm = wAbs ? wSum / wAbs : 0;            // -1..1 → drives the score
     const score100 = Math.round(clamp(50 + norm * 50, 0, 100));
-    const confidence = Math.round(clamp(Math.abs(norm) * 100, 5, 96));
+
+    const agreement = wAbs ? Math.abs(wSign) / wAbs : 0;   // 0..1 directional consensus
+    const strength  = wAbs ? wMag / wAbs : 0;              // 0..1 average signal conviction
+    const dataFactor = clamp(n / 150, 0.5, 1);            // more candles → steadier read
+    const confidence = Math.round(clamp((0.55 * agreement + 0.45 * strength) * dataFactor * 100, 5, 95));
     const label =
       score100 >= 72 ? 'Strongly Bullish' :
       score100 >= 60 ? 'Bullish' :
