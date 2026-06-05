@@ -31,6 +31,12 @@ makes no API calls** — the number of CoinGecko requests is fixed per day no
 matter how many people visit, and the key never reaches the browser. If `data/`
 isn't present yet, the app automatically falls back to the live API.
 
+**Live fallback sources** (when no bundle yet): candles come from **Binance**
+public klines (keyless, high rate limits, true per-interval candles), with
+CoinGecko as a last resort; prices come from one shared CoinGecko markets call
+and history from CryptoCompare. This keeps live browsing from tripping
+CoinGecko's per-coin rate limit.
+
 How it works:
 - `.github/workflows/refresh-data.yml` runs `scripts/fetch-data.mjs` once a day
   (and on manual dispatch), fetches markets + OHLC + history for the top 20

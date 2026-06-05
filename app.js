@@ -398,13 +398,36 @@ function refreshBar(coin, shimmerStats) {
  * → no fetching at all after the page opens. Falls back to the live API per-coin
  * only when the bundle isn't present (e.g. before the first scheduled run). ─── */
 
-/* ─── Fetch OHLC ─────────────────────────────────────────────────────────────── */
+/* ─── Fetch OHLC ─────────────────────────────────────────────────────────────
+ * Priority: in-memory bundle → Binance klines (keyless, high limits, true
+ * per-interval candles) → CoinGecko (last resort). Binance is what keeps live
+ * browsing from hitting CoinGecko's per-coin rate limit. */
+const BINANCE_INTERVAL = { 1:'1h', 4:'4h', 24:'1d', 168:'1w' };
+
+async function fetchOHLCBinance(coinId, tf, { fresh = false } = {}) {
+  const coin = coins.find(c => c.id === coinId);
+  const sym  = (coin && coin.symbol ? coin.symbol : coinId).toUpperCase() + 'USDT';
+  const iv   = BINANCE_INTERVAL[tf] || '1h';
+  const key  = `bz:${sym}:${iv}`;
+  if (fresh) cache.delete(key);
+  const raw = await cachedJSON(
+    key,
+    `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${iv}&limit=300`,
+    OHLC_TTL,
+    { noKey: true, tries: 2, timeout: 9000 }
+  );
+  if (!Array.isArray(raw) || !raw.length) throw new Error('Empty Binance OHLC');
+  return raw.map(d => ({ t:+d[0], o:+d[1], h:+d[2], l:+d[3], c:+d[4] }));
+}
+
 async function fetchOHLC(coinId, tf, { fresh = false } = {}) {
   if (STATIC && BUNDLE) {                    // from the in-memory bundle — no network
     const arr = BUNDLE.ohlc && BUNDLE.ohlc[coinId] && BUNDLE.ohlc[coinId][tf];
     if (!Array.isArray(arr) || !arr.length) throw new Error('Empty OHLC');
     return arr.map(d => ({ t:+d[0], o:+d[1], h:+d[2], l:+d[3], c:+d[4] }));
   }
+  // Live: Binance first (not rate-limited), CoinGecko only if Binance is unavailable.
+  try { return await fetchOHLCBinance(coinId, tf, { fresh }); } catch (e) { /* fall back */ }
   const days = TF_DAYS[tf] || 1;
   const key  = `ohlc:${coinId}:${tf}`;
   if (fresh) cache.delete(key);
