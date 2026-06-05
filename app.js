@@ -32,6 +32,7 @@ const API   = CFG.apiBase;
 // Cache TTLs — long enough to absorb rapid UI toggles & rate limits.
 const MARKETS_TTL = 25000;   // ms for the top-20 markets snapshot
 const OHLC_TTL    = 25000;   // ms per (coin, timeframe) candle set
+const HIST_TTL    = 6*3600*1000;  // daily history changes slowly — cache 6h
 
 const LS_KEY = 'cryptoscope:prefs';
 
@@ -48,6 +49,9 @@ let lastPrice    = null;
 let oracle       = null; // latest Oracle.analyze() result
 let tfScores     = {};   // { tf: verdictScore } for the current coin
 let tfScoresCoin = null; // coin id those scores belong to
+let seasonal     = null; // latest Seasonal.analyze() result
+let seasonalCoin = null; // coin id the seasonal result belongs to
+let currentCoinName = '';
 
 /* ─── Persisted prefs ───────────────────────────────────────────────────────── */
 function loadPrefs() {
@@ -385,6 +389,17 @@ async function refreshMarkets(force = false) {
   return arr;
 }
 
+/* ─── Fetch long daily history (one cached call per coin → powers seasonality) ─ */
+async function fetchHistory(coinId) {
+  const raw = await cachedJSON(
+    `hist:${coinId}`,
+    `${API}/coins/${coinId}/market_chart?vs_currency=usd&days=max`,
+    HIST_TTL
+  );
+  if (!raw || !Array.isArray(raw.prices) || !raw.prices.length) throw new Error('No history');
+  return raw.prices.map(p => ({ t:+p[0], price:+p[1] }));
+}
+
 /* ─── EMA (for chart overlay lines only — Oracle computes its own) ──────────── */
 function calcEMA(vals, period) {
   const out = new Array(vals.length).fill(null);
@@ -482,6 +497,158 @@ async function ensureMultiTF(coinId) {
   }
 }
 
+/* ════════════════════════════════════════════════════════════════════════════
+ * SIMPLE "QUICK READ" — plain-language summary for non-experts
+ * ════════════════════════════════════════════════════════════════════════════ */
+function humDur(ms) {
+  const h = ms/3600000;
+  if (h < 36) return 'the next day or so';
+  const d = h/24;
+  if (d < 10) return `the next ${Math.round(d)} days`;
+  const w = d/7;
+  if (w < 8) return `the next ${Math.round(w)} weeks`;
+  return `the next ${Math.round(d/30)} months`;
+}
+function simpleVerdict(score) {
+  if (score >= 66) return { txt:'Looks Strong',        emoji:'🚀', dir:'up'   };
+  if (score >= 57) return { txt:'Leaning Up',          emoji:'📈', dir:'up'   };
+  if (score >= 53) return { txt:'Slightly Up',         emoji:'↗️', dir:'up'   };
+  if (score >  47) return { txt:'Unclear / Sideways',  emoji:'↔️', dir:'flat' };
+  if (score >  43) return { txt:'Slightly Down',       emoji:'↘️', dir:'down' };
+  if (score >= 34) return { txt:'Leaning Down',        emoji:'📉', dir:'down' };
+  return                  { txt:'Looks Weak',          emoji:'🔻', dir:'down' };
+}
+function renderSimpleInner(res) {
+  const P = res.probs, C = res.composite;
+  const up = Math.round(P.pUp*100), down = 100 - up;
+  const v = simpleVerdict(C.score);
+  const dirCls = v.dir==='up' ? 'bull' : v.dir==='down' ? 'bear' : 'neutral';
+  const hz = humDur(res.meta.barMs * res.meta.horizon);
+  const av = res.volatility.annVol;
+  const risk = av > 0.9 ? '⚠ Expect big price swings — higher risk.'
+             : av > 0.5 ? 'Moderate price swings expected.'
+             : 'Relatively calm lately.';
+  const name = currentCoinName || 'this coin';
+  return `
+    <div class="ocard-title">Quick Read <span class="ttag">plain-English summary</span></div>
+    <div class="simple-head ${dirCls}">
+      <div class="simple-emoji">${v.emoji}</div>
+      <div>
+        <div class="simple-verdict">${v.txt}</div>
+        <div class="simple-sub">Over ${hz}, the model gives <b>${name}</b> about a <b>${up}%</b> chance of being higher than now.</div>
+      </div>
+    </div>
+    <div class="ud-bar">
+      <div class="ud-up ${up>=down?'win':''}" style="width:${Math.max(up,6)}%">▲ ${up}%</div>
+      <div class="ud-dn ${down>up?'win':''}" style="width:${Math.max(down,6)}%">▼ ${down}%</div>
+    </div>
+    <div class="simple-risk">${risk} <span class="simple-dis">Model estimate — not financial advice.</span></div>`;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * SEASONAL PATTERN — cycle overlay + projection (async, one cached history call)
+ * ════════════════════════════════════════════════════════════════════════════ */
+async function loadSeasonal(coinId) {
+  const myReq = reqId;
+  const coin = coins.find(c => c.id === coinId);
+  try {
+    const hist = await fetchHistory(coinId);
+    if (myReq !== reqId) return;
+    seasonal = window.Seasonal ? Seasonal.analyze(hist, { isBTC: coinId === 'bitcoin', coinName: coin ? coin.name : coinId }) : null;
+    seasonalCoin = coinId;
+    renderSeasonal(seasonal);
+  } catch (e) {
+    if (myReq !== reqId) return;
+    seasonal = null; seasonalCoin = coinId;
+    renderSeasonal(null);
+  }
+}
+
+function renderSeasonal(s) {
+  const host = document.getElementById('seasonalCard');
+  if (!host) return;
+  if (!s) {
+    host.innerHTML = `<div class="ocard-title">Seasonal Pattern</div>
+      ${odesc('How this coin behaved at this point in past cycles.', 'Needs enough history — not available for this coin yet.')}
+      <div class="seasonal-msg">No usable seasonal history for this asset.</div>`;
+    return;
+  }
+  const tgtCls = s.projection.targetPct >= 0 ? 'bull' : 'bear';
+  const months = s.monthly.map(m => {
+    const h = Math.min(100, Math.abs(m.avg)*100*4);
+    const col = m.avg >= 0 ? 'var(--bull)' : 'var(--bear)';
+    return `<div class="seas-m" title="${m.label}: ${(m.avg*100>=0?'+':'')}${(m.avg*100).toFixed(1)}% avg (${m.n} yrs)">
+      <div class="seas-m-bar" style="height:${Math.max(3,h)}%;background:${col}"></div><span>${m.label[0]}</span></div>`;
+  }).join('');
+  host.innerHTML = `
+    <div class="ocard-title">Seasonal Pattern <span class="ttag">${s.cycleLabel}</span></div>
+    ${odesc(`How ${s.coinName} moved at this stage of past ${s.cycleWord}.`, 'Past cycles overlaid + a typical-path projection & price target.')}
+    <div class="seas-pos">${s.posLabel}</div>
+    <div class="seas-wrap"><canvas id="seasCv"></canvas></div>
+    <div class="dist-legend">
+      <span><i style="background:#5a5a5a"></i>past ${s.cycleWord}</span>
+      <span><i style="background:var(--accent)"></i>current</span>
+      <span><i style="background:var(--accent2)"></i>typical path →</span>
+    </div>
+    <div class="metric-grid" style="margin-top:14px">
+      ${metric('Sample size', `${s.sampleYears} ${s.cycleWord}`)}
+      ${metric('Typical move ahead', pct(s.projection.targetPct,1), tgtCls)}
+      ${metric(`Seasonal target (${s.endLabel})`, fmtUSD(s.projection.targetPrice), tgtCls)}
+      ${metric(`Next month (${s.bias.month})`, `${pct(s.bias.pct,1)} avg`, s.bias.pct>=0?'bull':'bear')}
+    </div>
+    <div class="seas-months-title">Month-of-year seasonality (avg return)</div>
+    <div class="seas-months">${months}</div>
+    <div class="fingerprint-note">${s.summary}</div>`;
+  drawSeasonal(s);
+}
+
+function drawSeasonal(s) {
+  const canvas = document.getElementById('seasCv');
+  if (!canvas) return;
+  const host = canvas.parentElement;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const W = host.clientWidth, H = 200;
+  canvas.width = W*dpr; canvas.height = H*dpr;
+  canvas.style.width = W+'px'; canvas.style.height = H+'px';
+  const c = canvas.getContext('2d');
+  c.setTransform(dpr,0,0,dpr,0,0);
+  c.clearRect(0,0,W,H);
+
+  const padL=8, padR=8, padT=10, padB=18;
+  const pw = W-padL-padR, ph = H-padT-padB;
+  const yLo = s.yMin, yRng = (s.yMax - s.yMin) || 1;
+  const xOf = i => padL + i/(s.past[0].length-1)*pw;
+  const yOf = v => padT + ph*(1 - (v - yLo)/yRng);
+
+  // zero line
+  if (yLo < 0 && s.yMax > 0) {
+    const zy = yOf(0);
+    c.strokeStyle='rgba(255,255,255,0.08)'; c.lineWidth=1; c.setLineDash([3,3]);
+    c.beginPath(); c.moveTo(padL,zy); c.lineTo(W-padR,zy); c.stroke(); c.setLineDash([]);
+  }
+  const plot = (arr, color, width, dash) => {
+    c.strokeStyle=color; c.lineWidth=width; c.setLineDash(dash||[]);
+    c.beginPath(); let started=false;
+    arr.forEach((v,i) => { if (v==null){started=false;return;} const x=xOf(i),y=yOf(v); if(!started){c.moveTo(x,y);started=true;} else c.lineTo(x,y); });
+    c.stroke(); c.setLineDash([]);
+  };
+  // past cycles (faint)
+  s.past.forEach(p => plot(p, 'rgba(150,150,150,0.35)', 1));
+  // projection (dashed gold)
+  plot(s.projection.display, AI_C, 2, [6,4]);
+  // current (bright)
+  plot(s.current, '#c8f060', 2.5);
+
+  // "now" marker
+  const nx = xOf(s.projection.nowIdx);
+  c.strokeStyle='rgba(200,240,96,0.4)'; c.lineWidth=1; c.setLineDash([2,3]);
+  c.beginPath(); c.moveTo(nx,padT); c.lineTo(nx,H-padB); c.stroke(); c.setLineDash([]);
+  c.fillStyle='#888'; c.font='9px DM Mono,monospace'; c.textAlign='center';
+  c.fillText('now', nx, H-6);
+  c.textAlign='left';  c.fillText('cycle start', padL, H-6);
+  c.textAlign='right'; c.fillText(s.endLabel, W-padR, H-6);
+}
+
 function probBar(p, dir) {
   const col = dir > 0 ? 'var(--bull)' : 'var(--bear)';
   return `<div class="pbar"><div class="pbar-fill" style="width:${Math.round(p*100)}%;background:${col}"></div></div>`;
@@ -534,6 +701,16 @@ function renderOracle(res) {
 
   host.innerHTML = `
   <div class="oracle-grid">
+
+    <!-- QUICK READ (plain language, for everyone) -->
+    <div class="ocard simple wide">${renderSimpleInner(res)}</div>
+
+    <!-- SEASONAL (filled async once history loads) -->
+    <div class="ocard wide" id="seasonalCard">
+      <div class="ocard-title">Seasonal Pattern</div>
+      ${odesc('How this coin behaved at this point in past cycles.', 'Overlay of past cycles + a typical-path projection & target.')}
+      <div class="seasonal-msg">Loading historical cycles…</div>
+    </div>
 
     <!-- VERDICT -->
     <div class="ocard verdict">
@@ -682,6 +859,8 @@ function analyzeAndRender(fit) {
   oracle = (ohlcData.length >= 30 && window.Oracle) ? Oracle.analyze(ohlcData) : null;
   if (oracle) tfScores[currentTF] = oracle.composite.score;
   renderOracle(oracle);
+  // renderOracle rebuilds the grid, so restore the async seasonal card if ready
+  if (seasonal && seasonalCoin === document.getElementById('coinSelect').value) renderSeasonal(seasonal);
   document.getElementById('aiBadge').classList.toggle('on', coneOn);
   setChartData(fit);
 }
@@ -696,7 +875,9 @@ async function loadChart({ force = false } = {}) {
   savePrefs();
   lastPrice = null;                       // reset so the price flash isn't misleading across coins
   if (coinId !== tfScoresCoin) { tfScores = {}; tfScoresCoin = coinId; }  // fresh per-coin TF circles
+  if (coinId !== seasonalCoin) { seasonal = null; }                       // fresh per-coin seasonal
   const coin = coins.find(c => c.id === coinId);
+  currentCoinName = coin ? coin.name : coinId;
 
   setLoading(coin ? coin.name : coinId);
   if (coin) refreshBar(coin, true);
@@ -742,6 +923,8 @@ async function loadChart({ force = false } = {}) {
   analyzeAndRender(true);
   clearLoading();
   ensureMultiTF(coinId);                 // fill in the per-timeframe verdict circles
+  if (seasonalCoin === coinId && seasonal) renderSeasonal(seasonal);
+  else loadSeasonal(coinId);             // one cached history call → seasonal card
 
   lastUpdated = Date.now();
   setLive('', 'Live · just now');
@@ -825,7 +1008,7 @@ document.getElementById('retryBtn').addEventListener('click', () => {
 let resizeTimer = null;
 window.addEventListener('resize', () => {        // chart autosizes itself; just redraw the histogram
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (oracle) drawDistribution(oracle); }, 150);
+  resizeTimer = setTimeout(() => { if (oracle) drawDistribution(oracle); if (seasonal) drawSeasonal(seasonal); }, 150);
 });
 
 /* ─── Formatters ─────────────────────────────────────────────────────────────── */

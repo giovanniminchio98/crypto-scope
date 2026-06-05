@@ -360,6 +360,36 @@ select:disabled { opacity: 0.5; cursor: not-allowed; }
 .oracle-disclaimer { margin-top: 16px; font-size: 11px; color: var(--muted); line-height: 1.7; text-align: center; }
 .oracle-disclaimer strong { color: var(--bear); }
 
+/* ── Quick Read (simple, non-expert) card ── */
+.ocard.simple { background: linear-gradient(180deg, rgba(200,240,96,0.05), var(--card) 60%); border-color: #34381f; }
+.simple-head { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+.simple-emoji { font-size: 44px; line-height: 1; }
+.simple-verdict { font-family: 'DM Serif Display', serif; font-style: italic; font-size: 30px; line-height: 1.1; }
+.simple-head.bull .simple-verdict { color: var(--bull); }
+.simple-head.bear .simple-verdict { color: var(--bear); }
+.simple-head.neutral .simple-verdict { color: var(--text); }
+.simple-sub { font-size: 13px; color: var(--muted); line-height: 1.6; margin-top: 4px; }
+.simple-sub b { color: var(--text); }
+.ud-bar { display: flex; height: 34px; border-radius: 9px; overflow: hidden; background: var(--surface); font-size: 13px; font-weight: 500; }
+.ud-up, .ud-dn { display: flex; align-items: center; justify-content: center; color: #0e0e0e; transition: width 0.5s ease; white-space: nowrap; }
+.ud-up { background: rgba(200,240,96,0.55); }
+.ud-dn { background: rgba(255,107,107,0.55); }
+.ud-up.win { background: var(--bull); }
+.ud-dn.win { background: var(--bear); }
+.simple-risk { margin-top: 12px; font-size: 12px; color: var(--text); }
+.simple-dis { color: var(--muted); }
+
+/* ── Seasonal card ── */
+.seasonal-msg { color: var(--muted); font-size: 12px; padding: 24px 4px; text-align: center; }
+.seas-pos { font-size: 11px; color: var(--accent); letter-spacing: 0.04em; margin-bottom: 10px; }
+.seas-wrap { width: 100%; height: 200px; }
+.seas-wrap canvas { width: 100%; height: 200px; }
+.seas-months-title { font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 16px 0 6px; }
+.seas-months { display: flex; gap: 4px; align-items: flex-end; height: 54px; }
+.seas-m { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 3px; }
+.seas-m-bar { width: 100%; max-width: 22px; border-radius: 2px; }
+.seas-m span { font-size: 8px; color: var(--muted); }
+
 /* Toast — non-blocking notice for background errors / rate limits */
 .toast {
   position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px);

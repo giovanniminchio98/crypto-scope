@@ -13,8 +13,9 @@ const UPSTREAM = 'https://api.coingecko.com/api/v3';
 // Only these paths may be proxied — stops the Worker being an open proxy that
 // anyone could point at arbitrary CoinGecko endpoints on your key's quota.
 const ALLOW = [
-  /^\/coins\/markets$/,          // top-N markets snapshot
-  /^\/coins\/[^/]+\/ohlc$/,      // per-coin OHLC candles
+  /^\/coins\/markets$/,              // top-N markets snapshot
+  /^\/coins\/[^/]+\/ohlc$/,         // per-coin OHLC candles
+  /^\/coins\/[^/]+\/market_chart$/, // per-coin daily history (seasonality)
 ];
 
 export default {

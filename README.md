@@ -63,6 +63,19 @@ kind of analytics you normally only see in quant terminals:
   RSI, Stochastic, Bollinger %B, Z-score, Hurst-adjusted drift) fused into a
   single **verdict gauge** (0–100) with a confidence score and regime label.
 
+## Plain-English & seasonal views
+
+- **Quick Read card** — a non-expert summary at the top of the Oracle: a big
+  up/down probability split, a friendly verdict ("Leaning Up 📈"), a one-line
+  takeaway, and a plain risk note. Built for someone with zero crypto/finance
+  background.
+- **Seasonal Pattern card** — analyzes long daily history (one cached call) for
+  cyclical behaviour: Bitcoin uses its **4-year halving cycle**; everything else
+  uses a **yearly cycle**. It overlays past cycles vs the current one on a chart,
+  projects a "typical path" forward to a **price target**, and shows
+  month-of-year seasonality. `seasonal.js` is a standalone, dependency-free
+  engine.
+
 ## Features
 
 - **Robust API layer** — request timeouts, retries with exponential backoff,
