@@ -76,6 +76,8 @@ function savePrefs() {
 let lwChart=null, candleSeries=null, ema20Series=null, ema50Series=null;
 let fcUpper=null, fcLower=null, fcMedian=null;
 let chartReady=false;
+let seasChart=null;  // second lightweight-charts instance for the seasonal overlay
+const SEAS_PALETTE = ['#5a9cff', '#b57cf0', '#4ec9a8', '#e0667f', '#e09a52'];
 
 function initChart() {
   const el = document.getElementById('chartDiv');
@@ -582,6 +584,7 @@ function renderSeasonal(s, info) {
   const host = document.getElementById('seasonalCard');
   if (!host) return;
   if (!s) {
+    if (seasChart) { try { seasChart.remove(); } catch(e){} seasChart = null; }
     const name = (info && info.name) || 'this coin';
     let msg;
     if (info && info.kind === 'error') {
@@ -604,15 +607,17 @@ function renderSeasonal(s, info) {
     return `<div class="seas-m" title="${m.label}: ${(m.avg*100>=0?'+':'')}${(m.avg*100).toFixed(1)}% avg (${m.n} yrs)">
       <div class="seas-m-bar" style="height:${Math.max(3,h)}%;background:${col}"></div><span>${m.label[0]}</span></div>`;
   }).join('');
+  const legendPast = s.pastSeries.map((p,i) =>
+    `<span><i style="background:${SEAS_PALETTE[i%SEAS_PALETTE.length]}"></i>${p.label}</span>`).join('');
   host.innerHTML = `
     <div class="ocard-title">Seasonal Pattern <span class="ttag">${s.cycleLabel}</span></div>
-    ${odesc(`How ${s.coinName} moved at this stage of past ${s.cycleWord}.`, 'Past cycles overlaid + a typical-path projection & price target.')}
+    ${odesc(`How ${s.coinName} moved at this stage of past ${s.cycleWord} (normalized to % from cycle start).`, 'Past cycles overlaid + a typical-path projection of where price tends to go next.')}
     <div class="seas-pos">${s.posLabel}</div>
-    <div class="seas-wrap"><canvas id="seasCv"></canvas></div>
-    <div class="dist-legend">
-      <span><i style="background:#5a5a5a"></i>past ${s.cycleWord}</span>
-      <span><i style="background:var(--accent)"></i>current</span>
-      <span><i style="background:var(--accent2)"></i>typical path →</span>
+    <div class="seas-wrap"><div id="seasChartDiv"></div></div>
+    <div class="dist-legend seas-legend">
+      ${legendPast}
+      <span><i class="cur" style="background:#c8f060"></i>current</span>
+      <span><i class="proj" style="background:#f0b860"></i>typical path →</span>
     </div>
     <div class="metric-grid" style="margin-top:14px">
       ${metric('Sample size', `${s.sampleYears} ${s.cycleWord}`)}
@@ -623,54 +628,54 @@ function renderSeasonal(s, info) {
     <div class="seas-months-title">Month-of-year seasonality (avg return)</div>
     <div class="seas-months">${months}</div>
     <div class="fingerprint-note">${s.summary}</div>`;
-  drawSeasonal(s);
+  buildSeasChart(s);
 }
 
-function drawSeasonal(s) {
-  const canvas = document.getElementById('seasCv');
-  if (!canvas) return;
-  const host = canvas.parentElement;
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const W = host.clientWidth, H = 200;
-  canvas.width = W*dpr; canvas.height = H*dpr;
-  canvas.style.width = W+'px'; canvas.style.height = H+'px';
-  const c = canvas.getContext('2d');
-  c.setTransform(dpr,0,0,dpr,0,0);
-  c.clearRect(0,0,W,H);
+function seasAxisLabel(t, s) {
+  const frac = ((t/86400) - 1) / (s.gridN - 1);
+  if (s.mode === 'halving') return (frac*4).toFixed(1) + 'y';
+  const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return M[Math.min(11, Math.max(0, Math.floor(frac*12)))];
+}
 
-  const padL=8, padR=8, padT=10, padB=18;
-  const pw = W-padL-padR, ph = H-padT-padB;
-  const yLo = s.yMin, yRng = (s.yMax - s.yMin) || 1;
-  const xOf = i => padL + i/(s.past[0].length-1)*pw;
-  const yOf = v => padT + ph*(1 - (v - yLo)/yRng);
-
-  // zero line
-  if (yLo < 0 && s.yMax > 0) {
-    const zy = yOf(0);
-    c.strokeStyle='rgba(255,255,255,0.08)'; c.lineWidth=1; c.setLineDash([3,3]);
-    c.beginPath(); c.moveTo(padL,zy); c.lineTo(W-padR,zy); c.stroke(); c.setLineDash([]);
-  }
-  const plot = (arr, color, width, dash) => {
-    c.strokeStyle=color; c.lineWidth=width; c.setLineDash(dash||[]);
-    c.beginPath(); let started=false;
-    arr.forEach((v,i) => { if (v==null){started=false;return;} const x=xOf(i),y=yOf(v); if(!started){c.moveTo(x,y);started=true;} else c.lineTo(x,y); });
-    c.stroke(); c.setLineDash([]);
-  };
-  // past cycles (faint)
-  s.past.forEach(p => plot(p, 'rgba(150,150,150,0.35)', 1));
-  // projection (dashed gold)
-  plot(s.projection.display, AI_C, 2, [6,4]);
-  // current (bright)
-  plot(s.current, '#c8f060', 2.5);
-
-  // "now" marker
-  const nx = xOf(s.projection.nowIdx);
-  c.strokeStyle='rgba(200,240,96,0.4)'; c.lineWidth=1; c.setLineDash([2,3]);
-  c.beginPath(); c.moveTo(nx,padT); c.lineTo(nx,H-padB); c.stroke(); c.setLineDash([]);
-  c.fillStyle='#888'; c.font='9px DM Mono,monospace'; c.textAlign='center';
-  c.fillText('now', nx, H-6);
-  c.textAlign='left';  c.fillText('cycle start', padL, H-6);
-  c.textAlign='right'; c.fillText(s.endLabel, W-padR, H-6);
+/* Seasonal overlay rendered with lightweight-charts (crisp vector lines).
+   X-axis is a synthetic per-cycle timeline (so every cycle aligns); each value
+   is normalized cumulative return, so all cycles are directly comparable. */
+function buildSeasChart(s) {
+  if (seasChart) { try { seasChart.remove(); } catch(e){} seasChart = null; }
+  const el = document.getElementById('seasChartDiv');
+  if (!el) return;
+  if (!window.LightweightCharts) { el.innerHTML = '<div class="chart-fallback">Chart engine unavailable.</div>'; return; }
+  seasChart = LightweightCharts.createChart(el, {
+    autoSize: true,
+    layout: { background:{ type:'solid', color:'#161616' }, textColor:'#7a7a7a', fontFamily:"'DM Mono', monospace", fontSize:10 },
+    grid: { vertLines:{ color:'rgba(255,255,255,0.03)' }, horzLines:{ color:'rgba(255,255,255,0.03)' } },
+    rightPriceScale: { borderColor:'#2a2a2a', scaleMargins:{ top:0.1, bottom:0.08 } },
+    timeScale: { borderColor:'#2a2a2a', tickMarkFormatter: t => seasAxisLabel(t, s) },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Magnet, vertLine:{ labelVisible:false }, horzLine:{ labelVisible:true } },
+    localization: {
+      priceFormatter: v => (v*100>=0?'+':'') + (v*100).toFixed(0) + '%',
+      timeFormatter: t => Math.round(((t/86400)-1)/(s.gridN-1)*100) + '% through cycle',
+    },
+    handleScroll: false, handleScale: false,
+  });
+  const tOf = i => (i+1)*86400;
+  const toData = arr => arr.map((v,i) => v==null ? null : { time: tOf(i), value: v }).filter(Boolean);
+  // past cycles — distinct colors, thin
+  s.pastSeries.forEach((p, idx) => {
+    const ser = seasChart.addLineSeries({ color: SEAS_PALETTE[idx%SEAS_PALETTE.length], lineWidth: 1,
+      priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false });
+    ser.setData(toData(p.vals));
+  });
+  // projection — dashed gold (where price tends to go next)
+  const proj = seasChart.addLineSeries({ color:'#f0b860', lineWidth:2, lineStyle:2,
+    priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false });
+  proj.setData(toData(s.projection.display));
+  // current cycle — bold, bright, on top
+  const cur = seasChart.addLineSeries({ color:'#c8f060', lineWidth:3,
+    priceLineVisible:false, lastValueVisible:true, crosshairMarkerVisible:true });
+  cur.setData(toData(s.current));
+  seasChart.timeScale().fitContent();
 }
 
 function probBar(p, dir) {
@@ -1032,7 +1037,7 @@ document.getElementById('retryBtn').addEventListener('click', () => {
 let resizeTimer = null;
 window.addEventListener('resize', () => {        // chart autosizes itself; just redraw the histogram
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (oracle) drawDistribution(oracle); if (seasonal) drawSeasonal(seasonal); }, 150);
+  resizeTimer = setTimeout(() => { if (oracle) drawDistribution(oracle); }, 150);  // both charts autosize themselves
 });
 
 /* ─── Formatters ─────────────────────────────────────────────────────────────── */

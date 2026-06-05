@@ -86,8 +86,11 @@ const Seasonal = (function () {
     if (segs.length < 2) return null;
 
     const current = segs[segs.length - 1];
-    const completed = segs.slice(0, -1).filter(s => Math.max(...s.x) >= 0.9);
+    let completed = segs.slice(0, -1).filter(s => Math.max(...s.x) >= 0.9);
     if (completed.length < 1) return null;
+    // keep only the most recent few cycles for a clean, comparable overlay
+    const maxCycles = opts.maxCycles || 4;
+    completed = completed.slice(-maxCycles);
 
     const past = completed.map(resample);
     const curR = resample(current);
@@ -148,11 +151,13 @@ const Seasonal = (function () {
     const summary = `Across ${completed.length} past ${cycleWord}, ${opts.coinName||'this asset'} averaged a ` +
       `${(targetPct*100>=0?'+':'')}${(targetPct*100).toFixed(1)}% ${dirWord} from this point to ${endLabel} (${remLabel} away) — ${reliability}.`;
 
+    const pastSeries = completed.map((seg, i) => ({ label: seg.label, vals: past[i] }));
+
     return {
       mode, cycleLabel: isBTC ? 'Halving cycle · 4y' : 'Yearly cycle',
-      cycleWord, coinName: opts.coinName || '',
+      cycleWord, coinName: opts.coinName || '', gridN: G,
       posLabel, endLabel, remLabel,
-      past, current: curR, projection: { display: proj, targetPct, targetPrice, nowIdx, nowFrac },
+      pastSeries, current: curR, projection: { display: proj, targetPct, targetPrice, nowIdx, nowFrac },
       yMin, yMax, monthly, bias, sampleYears: completed.length, summary,
     };
   }
