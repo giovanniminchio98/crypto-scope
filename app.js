@@ -52,6 +52,7 @@ let lastUpdated  = 0;
 let lastPrice    = null;
 let STATIC       = false; // true when pre-fetched data/ files are present (set at boot)
 let dataGeneratedAt = 0;  // generatedAt from data/meta.json (static mode)
+let dataIntervalH   = 6;  // how often the GitHub Action refreshes data (hours)
 let oracle       = null; // latest Oracle.analyze() result
 let tfScores     = {};   // { tf: verdictScore } for the current coin
 let tfScoresCoin = null; // coin id those scores belong to
@@ -203,16 +204,24 @@ function setLive(state, text) {
   tag.className = 'live-tag' + (state ? ' ' + state : '');
   if (text != null) document.getElementById('liveTxt').textContent = text;
 }
+function nextRefreshDate() {                 // next UTC-aligned schedule boundary
+  const ms = dataIntervalH * 3600 * 1000;
+  return new Date(Math.ceil(Date.now() / ms) * ms);
+}
+function updateStaticTag() {
+  const t = nextRefreshDate().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const stale = dataGeneratedAt && (Date.now() - dataGeneratedAt > dataIntervalH * 3600 * 1000 * 2.2);
+  const tag = document.getElementById('liveTag');
+  tag.className = 'live-tag' + (stale ? ' stale' : '');
+  document.getElementById('liveTxt').textContent = `Refreshed every ${dataIntervalH}h · next ~${t}`;
+}
 function markFresh() {
-  if (STATIC) {
-    const d = dataGeneratedAt ? new Date(dataGeneratedAt) : new Date();
-    setLive('', 'Updated ' + d.toLocaleDateString([], { month:'short', day:'numeric' }));
-  } else {
-    setLive('', 'Live · just now');
-  }
+  if (STATIC) updateStaticTag();
+  else setLive('', 'Live · just now');
 }
 function tickLiveLabel() {
-  if (STATIC || !lastUpdated) return;   // static data shows a fixed date, not a ticking clock
+  if (STATIC) { updateStaticTag(); return; }   // show the schedule, not a ticking clock
+  if (!lastUpdated) return;
   const secs = Math.round((Date.now() - lastUpdated) / 1000);
   let txt;
   if (secs < 5)        txt = 'Live · just now';
@@ -287,7 +296,6 @@ function setLoading(coinName) {
   document.getElementById('coinSelect').disabled = true;
   document.getElementById('tfGroup').classList.add('disabled');
   document.getElementById('aiToggle').classList.add('disabled');
-  document.getElementById('refreshBtn').classList.add('spin');
   setLive('syncing', 'Loading…');
 }
 
@@ -299,7 +307,6 @@ function clearLoading() {
   document.getElementById('coinSelect').disabled = false;
   document.getElementById('tfGroup').classList.remove('disabled');
   document.getElementById('aiToggle').classList.remove('disabled');
-  document.getElementById('refreshBtn').classList.remove('spin');
 }
 
 function showError(msg) {
@@ -313,7 +320,6 @@ function showError(msg) {
   document.getElementById('coinSelect').disabled = false;
   document.getElementById('tfGroup').classList.remove('disabled');
   document.getElementById('aiToggle').classList.remove('disabled');
-  document.getElementById('refreshBtn').classList.remove('spin');
   setLive('offline', 'Offline');
 }
 
@@ -330,7 +336,7 @@ async function boot() {
   setLive('syncing', 'Connecting…');
   try {
     const meta = await fetchJSON(`${STATIC_BASE}/meta.json?t=${Date.now()}`, { tries: 1, timeout: 6000, noKey: true });
-    if (meta && meta.generatedAt) { STATIC = true; dataGeneratedAt = meta.generatedAt; }
+    if (meta && meta.generatedAt) { STATIC = true; dataGeneratedAt = meta.generatedAt; if (meta.intervalHours) dataIntervalH = meta.intervalHours; }
   } catch (e) { STATIC = false; }
 
   try {
@@ -1076,10 +1082,6 @@ document.getElementById('aiToggle').addEventListener('click', () => {
   if (coneOn && lwChart) lwChart.timeScale().fitContent();
 });
 
-document.getElementById('refreshBtn').addEventListener('click', () => {
-  if (isFetching) return;
-  loadChart({ force: true });   // force-bypass cache for both candles + price
-});
 
 document.getElementById('retryBtn').addEventListener('click', () => {
   if (!coins.length) boot();

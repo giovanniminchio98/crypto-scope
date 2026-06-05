@@ -260,19 +260,6 @@ select:disabled { opacity: 0.5; cursor: not-allowed; }
 .block-sub { font-family: 'DM Mono', monospace; font-style: normal; font-size: 11px; letter-spacing: 0.06em; color: var(--muted); margin-left: auto; text-transform: uppercase; }
 .oracle-head .block-kicker { color: var(--accent2); }
 
-/* ── Refresh button ── */
-.refresh-btn {
-  display: flex; align-items: center; gap: 8px;
-  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
-  color: var(--text); font-family: 'DM Mono', monospace; font-size: 11px;
-  letter-spacing: 0.1em; text-transform: uppercase; padding: 12px 16px;
-  cursor: pointer; transition: border-color 0.2s, color 0.2s;
-}
-.refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
-.refresh-btn svg { transition: transform 0.6s ease; }
-.refresh-btn.spin svg { animation: spin 0.9s linear infinite; }
-.refresh-btn:active svg { transform: rotate(-180deg); }
-
 /* ════════ ORACLE DASHBOARD ════════ */
 .oracle { animation: fadeUp 0.5s ease both; }
 .oracle-empty { color: var(--muted); font-size: 13px; padding: 30px; text-align: center; background: var(--card); border: 1px dashed var(--border); border-radius: var(--radius); }

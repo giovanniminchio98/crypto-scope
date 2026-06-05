@@ -4,7 +4,7 @@ name: Refresh market data
 # reads those static files, so visitor traffic generates no API calls.
 on:
   schedule:
-    - cron: '17 6 * * *'   # daily at ~06:17 UTC
+    - cron: '0 */6 * * *'   # every 6h at 00:00 / 06:00 / 12:00 / 18:00 UTC
   workflow_dispatch: {}     # allow manual runs from the Actions tab
 
 permissions:

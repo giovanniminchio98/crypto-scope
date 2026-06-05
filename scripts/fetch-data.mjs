@@ -65,7 +65,7 @@ async function main() {
     await sleep(1200);
   }
 
-  await writeFile(`${OUT}/meta.json`, JSON.stringify({ generatedAt: Date.now(), coins: ids, ok, fail }));
+  await writeFile(`${OUT}/meta.json`, JSON.stringify({ generatedAt: Date.now(), intervalHours: 6, coins: ids, ok, fail }));
   console.log(`Done. OHLC ok=${ok} fail=${fail}, ${ids.length} coins.`);
 }
 
