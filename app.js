@@ -144,7 +144,13 @@ function setChartData(fit) {
     ema50Series.setData(toLine(e50));
     updateForecastSeries();
     updateLegend(ohlcData[ohlcData.length-1]);
-    if (fit) lwChart.timeScale().fitContent();
+    if (fit) {
+      // Reset the view on coin/timeframe change: re-fit the time axis AND
+      // re-enable price-axis auto-scaling (a manual drag disables it), so the
+      // chart re-centers on the current price instead of keeping the old view.
+      lwChart.timeScale().fitContent();
+      try { candleSeries.priceScale().applyOptions({ autoScale: true }); } catch (e) {}
+    }
   } catch (e) { console.error('chart setData failed:', e); }
 }
 
