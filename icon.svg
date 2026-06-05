@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b1b1b"/>
+      <stop offset="1" stop-color="#0c0c0c"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.85" cy="0.12" r="0.6">
+      <stop offset="0" stop-color="#c8f060" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#c8f060" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="112" fill="url(#glow)"/>
+  <!-- candle 1 (bear / red) -->
+  <rect x="154" y="236" width="15" height="134" rx="6" fill="#ff6b6b"/>
+  <rect x="128" y="266" width="66" height="72"  rx="10" fill="#ff6b6b"/>
+  <!-- candle 2 (bull / lime) -->
+  <rect x="249" y="184" width="15" height="133" rx="6" fill="#c8f060"/>
+  <rect x="223" y="215" width="66" height="72"  rx="10" fill="#c8f060"/>
+  <!-- candle 3 (bull / lime) -->
+  <rect x="343" y="113" width="15" height="153" rx="6" fill="#c8f060"/>
+  <rect x="318" y="143" width="66" height="92"  rx="10" fill="#c8f060"/>
+</svg>
