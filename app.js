@@ -215,13 +215,13 @@ function withKey(url) {
   if (!CFG.apiKey) return url;
   return url + (url.includes('?') ? '&' : '?') + 'x_cg_demo_api_key=' + encodeURIComponent(CFG.apiKey);
 }
-async function fetchJSON(url, { tries = 3, timeout = 9000 } = {}) {
+async function fetchJSON(url, { tries = 3, timeout = 9000, noKey = false } = {}) {
   let lastErr;
   for (let attempt = 0; attempt < tries; attempt++) {
     const ctrl = new AbortController();
     const to   = setTimeout(() => ctrl.abort(), timeout);
     try {
-      const r = await fetch(withKey(url), { signal: ctrl.signal, headers: { accept: 'application/json' } });
+      const r = await fetch(noKey ? url : withKey(url), { signal: ctrl.signal, headers: { accept: 'application/json' } });
       clearTimeout(to);
       if (r.status === 429) {
         const ra = parseFloat(r.headers.get('retry-after'));
@@ -389,15 +389,25 @@ async function refreshMarkets(force = false) {
   return arr;
 }
 
-/* ─── Fetch long daily history (one cached call per coin → powers seasonality) ─ */
+/* ─── Fetch long daily history → powers seasonality ──────────────────────────
+ * CoinGecko's free/demo tier caps history at 365 days, which isn't enough for
+ * multi-year / halving seasonality. CryptoCompare's histoday (allData) is free,
+ * keyless, CORS-friendly and returns full history (BTC back to 2010) — and it
+ * doesn't touch the CoinGecko quota. One cached call per coin (6h TTL). */
 async function fetchHistory(coinId) {
-  const raw = await cachedJSON(
-    `hist:${coinId}`,
-    `${API}/coins/${coinId}/market_chart?vs_currency=usd&days=max`,
-    HIST_TTL
+  const coin = coins.find(c => c.id === coinId);
+  const sym  = (coin && coin.symbol ? coin.symbol : coinId).toUpperCase();
+  const raw  = await cachedJSON(
+    `hist:${sym}`,
+    `https://min-api.cryptocompare.com/data/v2/histoday?fsym=${encodeURIComponent(sym)}&tsym=USD&allData=true`,
+    HIST_TTL,
+    { tries: 2, timeout: 12000, noKey: true }
   );
-  if (!raw || !Array.isArray(raw.prices) || !raw.prices.length) throw new Error('No history');
-  return raw.prices.map(p => ({ t:+p[0], price:+p[1] }));
+  const arr = raw && raw.Data && raw.Data.Data;
+  if (!Array.isArray(arr)) throw new Error('No history');
+  const out = arr.filter(d => d && d.close > 0).map(d => ({ t: d.time * 1000, price: +d.close }));
+  if (out.length < 220) throw new Error('Insufficient history');
+  return out;
 }
 
 /* ─── EMA (for chart overlay lines only — Oracle computes its own) ──────────── */

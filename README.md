@@ -69,9 +69,10 @@ kind of analytics you normally only see in quant terminals:
   up/down probability split, a friendly verdict ("Leaning Up 📈"), a one-line
   takeaway, and a plain risk note. Built for someone with zero crypto/finance
   background.
-- **Seasonal Pattern card** — analyzes long daily history (one cached call) for
-  cyclical behaviour: Bitcoin uses its **4-year halving cycle**; everything else
-  uses a **yearly cycle**. It overlays past cycles vs the current one on a chart,
+- **Seasonal Pattern card** — analyzes long daily history (one cached call to
+  CryptoCompare's keyless `histoday`, since CoinGecko's free tier caps history at
+  365 days) for cyclical behaviour: Bitcoin uses its **4-year halving cycle**;
+  everything else uses a **yearly cycle**. It overlays past cycles vs the current one on a chart,
   projects a "typical path" forward to a **price target**, and shows
   month-of-year seasonality. `seasonal.js` is a standalone, dependency-free
   engine.
