@@ -36,37 +36,38 @@ async function getJSON(url, { tries = 4, noKey = false } = {}) {
 }
 
 async function main() {
-  await mkdir(`${OUT}/ohlc`, { recursive: true });
-  await mkdir(`${OUT}/history`, { recursive: true });
+  await mkdir(OUT, { recursive: true });
 
   console.log('Fetching markets…');
   const markets = await getJSON(`${CG}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`);
-  await writeFile(`${OUT}/markets.json`, JSON.stringify(markets));
   const ids = markets.map(c => c.id);
+
+  // One bundle holds everything for every coin → the site loads it once.
+  const bundle = { generatedAt: Date.now(), intervalHours: 6, coins: ids, markets, ohlc: {}, history: {} };
 
   let ok = 0, fail = 0;
   for (const c of markets) {
+    bundle.ohlc[c.id] = {};
     for (const [tf, days] of Object.entries(TF_DAYS)) {
       try {
-        const ohlc = await getJSON(`${CG}/coins/${c.id}/ohlc?vs_currency=usd&days=${days}`);
-        await writeFile(`${OUT}/ohlc/${c.id}-${tf}.json`, JSON.stringify(ohlc));
+        bundle.ohlc[c.id][tf] = await getJSON(`${CG}/coins/${c.id}/ohlc?vs_currency=usd&days=${days}`);
         ok++;
       } catch (e) { console.error('  OHLC fail', c.id, tf, e.message); fail++; }
       await sleep(2400);  // stay well under the demo-tier rate limit
     }
-    // Long history from CryptoCompare (keyless), downsampled to weekly to keep the repo lean.
+    // Long history from CryptoCompare (keyless), downsampled to weekly to keep the bundle lean.
     try {
       const sym = (c.symbol || c.id).toUpperCase();
       const cc = await getJSON(`https://min-api.cryptocompare.com/data/v2/histoday?fsym=${encodeURIComponent(sym)}&tsym=USD&allData=true`, { noKey: true });
       const arr = (cc && cc.Data && cc.Data.Data) || [];
-      const weekly = arr.filter((d, i) => d && d.close > 0 && i % 7 === 0).map(d => [d.time * 1000, +d.close]);
-      await writeFile(`${OUT}/history/${c.id}.json`, JSON.stringify({ prices: weekly }));
+      bundle.history[c.id] = arr.filter((d, i) => d && d.close > 0 && i % 7 === 0).map(d => [d.time * 1000, +d.close]);
     } catch (e) { console.error('  history fail', c.id, e.message); }
     await sleep(1200);
   }
 
-  await writeFile(`${OUT}/meta.json`, JSON.stringify({ generatedAt: Date.now(), intervalHours: 6, coins: ids, ok, fail }));
-  console.log(`Done. OHLC ok=${ok} fail=${fail}, ${ids.length} coins.`);
+  await writeFile(`${OUT}/bundle.json`, JSON.stringify(bundle));
+  await writeFile(`${OUT}/meta.json`, JSON.stringify({ generatedAt: bundle.generatedAt, intervalHours: 6, coins: ids, ok, fail }));
+  console.log(`Done. OHLC ok=${ok} fail=${fail}, ${ids.length} coins → data/bundle.json`);
 }
 
 main().catch(e => { console.error(e); process.exit(1); });
