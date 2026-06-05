@@ -10,6 +10,7 @@
 const CFG = Object.assign({
   apiBase: 'https://api.coingecko.com/api/v3',
   apiKey:  '',            // CoinGecko demo key (CG-...). Empty = anonymous tier.
+  dataBase: 'data',       // folder of pre-fetched static JSON (GitHub Actions output)
 }, window.CRYPTOSCOPE_CONFIG || {});
 
 /* ─── Constants ────────────────────────────────────────────────────────────── */
@@ -34,6 +35,9 @@ const MARKETS_TTL = 25000;   // ms for the top-20 markets snapshot
 const OHLC_TTL    = 25000;   // ms per (coin, timeframe) candle set
 const HIST_TTL    = 6*3600*1000;  // daily history changes slowly — cache 6h
 
+const STATIC_BASE = CFG.dataBase || 'data';
+const STATIC_TTL  = 10*60*1000;   // re-read a static file at most every 10 min
+
 const LS_KEY = 'cryptoscope:prefs';
 
 /* ─── State ─────────────────────────────────────────────────────────────────── */
@@ -46,6 +50,8 @@ let reqId      = 0;      // monotonically increasing token — guards against st
 let refreshTimer = null;
 let lastUpdated  = 0;
 let lastPrice    = null;
+let STATIC       = false; // true when pre-fetched data/ files are present (set at boot)
+let dataGeneratedAt = 0;  // generatedAt from data/meta.json (static mode)
 let oracle       = null; // latest Oracle.analyze() result
 let tfScores     = {};   // { tf: verdictScore } for the current coin
 let tfScoresCoin = null; // coin id those scores belong to
@@ -197,8 +203,16 @@ function setLive(state, text) {
   tag.className = 'live-tag' + (state ? ' ' + state : '');
   if (text != null) document.getElementById('liveTxt').textContent = text;
 }
+function markFresh() {
+  if (STATIC) {
+    const d = dataGeneratedAt ? new Date(dataGeneratedAt) : new Date();
+    setLive('', 'Updated ' + d.toLocaleDateString([], { month:'short', day:'numeric' }));
+  } else {
+    setLive('', 'Live · just now');
+  }
+}
 function tickLiveLabel() {
-  if (!lastUpdated) return;
+  if (STATIC || !lastUpdated) return;   // static data shows a fixed date, not a ticking clock
   const secs = Math.round((Date.now() - lastUpdated) / 1000);
   let txt;
   if (secs < 5)        txt = 'Live · just now';
@@ -311,9 +325,16 @@ async function boot() {
   document.getElementById('aiToggle').classList.toggle('active', coneOn);
   initChart();
 
+  // Detect pre-fetched static data (data/meta.json). If present, the app reads
+  // static JSON and makes no API calls at runtime.
   setLive('syncing', 'Connecting…');
   try {
-    coins = await cachedJSON('markets', MARKETS_URL, MARKETS_TTL);
+    const meta = await fetchJSON(`${STATIC_BASE}/meta.json?t=${Date.now()}`, { tries: 1, timeout: 6000, noKey: true });
+    if (meta && meta.generatedAt) { STATIC = true; dataGeneratedAt = meta.generatedAt; }
+  } catch (e) { STATIC = false; }
+
+  try {
+    coins = await loadMarketsArray();
     if (!Array.isArray(coins) || !coins.length) throw new Error('No market data');
     document.getElementById('coinSelect').innerHTML = coins.map(c =>
       `<option value="${c.id}">${c.symbol.toUpperCase()} — ${c.name}</option>`
@@ -360,30 +381,48 @@ function refreshBar(coin, shimmerStats) {
   }
 }
 
+/* ─── Static-first loader ────────────────────────────────────────────────────
+ * In static mode (data/ present) we read pre-fetched JSON → zero API calls at
+ * runtime. If a static file is missing we fall back to the live API, so the app
+ * still works locally / before the first scheduled fetch. */
+async function staticJSON(relPath, force) {
+  const url = `${STATIC_BASE}/${relPath}` + (force ? `?t=${Date.now()}` : '');
+  return cachedJSON(`s:${relPath}`, url, STATIC_TTL, { noKey: true, tries: 1, timeout: 8000 });
+}
+
 /* ─── Fetch OHLC ─────────────────────────────────────────────────────────────── */
 async function fetchOHLC(coinId, tf, { fresh = false } = {}) {
-  const days = TF_DAYS[tf] || 1;
-  const key  = `ohlc:${coinId}:${tf}`;
-  if (fresh) cache.delete(key);
-  const raw  = await cachedJSON(
-    key,
-    `${API}/coins/${coinId}/ohlc?vs_currency=usd&days=${days}`,
-    OHLC_TTL
-  );
+  let raw = null;
+  if (STATIC) {
+    const sk = `s:ohlc/${coinId}-${tf}.json`;
+    if (fresh) cache.delete(sk);
+    try { raw = await staticJSON(`ohlc/${coinId}-${tf}.json`, fresh); } catch (e) { raw = null; }
+  }
+  if (!Array.isArray(raw) || !raw.length) {        // live fallback
+    const days = TF_DAYS[tf] || 1;
+    const key  = `ohlc:${coinId}:${tf}`;
+    if (fresh) cache.delete(key);
+    raw = await cachedJSON(key, `${API}/coins/${coinId}/ohlc?vs_currency=usd&days=${days}`, OHLC_TTL);
+  }
   if (!Array.isArray(raw) || raw.length === 0) throw new Error('Empty OHLC');
   return raw.map(d => ({ t:+d[0], o:+d[1], h:+d[2], l:+d[3], c:+d[4] }));
 }
 
-/* ─── Refresh the top-20 markets snapshot (one call covers every coin) ───────────
- * Cached, so flipping between coins within the TTL reuses a single response
- * instead of firing a new request per coin — this is the main rate-limit saver.
- * Pass force:true (the Refresh button) to bust the cache and pull live prices. */
+/* ─── Top-20 markets snapshot (one source covers every coin) ─────────────────── */
 const MARKETS_URL =
   `${API}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`;
 
-async function refreshMarkets(force = false) {
+async function loadMarketsArray(force = false) {
+  if (STATIC) {
+    if (force) cache.delete('s:markets.json');
+    try { const a = await staticJSON('markets.json', force); if (Array.isArray(a) && a.length) return a; } catch (e) {}
+  }
   if (force) cache.delete('markets');
-  const arr = await cachedJSON('markets', MARKETS_URL, MARKETS_TTL);
+  return cachedJSON('markets', MARKETS_URL, MARKETS_TTL);
+}
+
+async function refreshMarkets(force = false) {
+  const arr = await loadMarketsArray(force);
   if (Array.isArray(arr)) {
     const byId = new Map(arr.map(c => [c.id, c]));
     coins = coins.map(c => byId.get(c.id) || c);  // merge fresh data, keep dropdown order
@@ -397,6 +436,17 @@ async function refreshMarkets(force = false) {
  * keyless, CORS-friendly and returns full history (BTC back to 2010) — and it
  * doesn't touch the CoinGecko quota. One cached call per coin (6h TTL). */
 async function fetchHistory(coinId) {
+  if (STATIC) {
+    try {
+      const j = await staticJSON(`history/${coinId}.json`);
+      const pr = j && j.prices;
+      if (Array.isArray(pr) && pr.length) {
+        const out = pr.map(p => ({ t: +p[0], price: +p[1] })).filter(d => d.price > 0);
+        if (out.length) return out;
+      }
+    } catch (e) { /* fall through to live */ }
+  }
+  // Live fallback: CryptoCompare histoday (keyless, full history)
   const coin = coins.find(c => c.id === coinId);
   const sym  = (coin && coin.symbol ? coin.symbol : coinId).toUpperCase();
   const raw  = await cachedJSON(
@@ -956,7 +1006,7 @@ async function loadChart({ force = false } = {}) {
   else loadSeasonal(coinId);             // one cached history call → seasonal card
 
   lastUpdated = Date.now();
-  setLive('', 'Live · just now');
+  markFresh();
   startAutoRefresh();
 }
 
@@ -981,7 +1031,7 @@ async function refreshLive() {
     analyzeAndRender(false);
 
     lastUpdated = Date.now();
-    setLive('', 'Live · just now');
+    markFresh();
   } catch (e) {
     if (myReq !== reqId) return;
     setLive('stale', 'Reconnecting…');
@@ -990,6 +1040,7 @@ async function refreshLive() {
 }
 
 function startAutoRefresh() {
+  if (STATIC) return;             // static data refreshes daily — no point polling
   stopAutoRefresh();
   const interval = TF_REFRESH[currentTF] || 60000;
   refreshTimer = setInterval(refreshLive, interval);
@@ -999,6 +1050,7 @@ function stopAutoRefresh() {
 }
 
 document.addEventListener('visibilitychange', () => {
+  if (STATIC) return;             // no background polling in static mode
   if (document.hidden) {
     stopAutoRefresh();
   } else if (ohlcData.length) {

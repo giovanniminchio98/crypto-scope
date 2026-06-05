@@ -14,7 +14,6 @@ step, no dependencies. Data via the [CoinGecko API](https://www.coingecko.com/en
 | `app.js`     | Data fetching, caching, canvas chart, live refresh, dashboard |
 
 ## Run locally
-
 It's a static site, so just serve the folder with anything:
 
 ```bash
@@ -24,6 +23,29 @@ python3 -m http.server 8080
 
 (Opening `index.html` directly via `file://` also works, but a local server
 avoids browser quirks.)
+
+## Static daily data (zero runtime API calls)
+
+By default the site reads pre-fetched JSON from `data/`, so **visitor traffic
+makes no API calls** — the number of CoinGecko requests is fixed per day no
+matter how many people visit, and the key never reaches the browser. If `data/`
+isn't present yet, the app automatically falls back to the live API.
+
+How it works:
+- `.github/workflows/refresh-data.yml` runs `scripts/fetch-data.mjs` once a day
+  (and on manual dispatch), fetches markets + OHLC + history for the top 20
+  coins, and commits the JSON into `data/`.
+- The app probes `data/meta.json` on load; if present it runs in **static mode**
+  (no polling; the status shows "Updated <date>").
+
+To enable it:
+1. Add a repo **secret** `CG_API_KEY` = your CoinGecko demo key
+   (Settings → Secrets and variables → Actions). It's used only inside the
+   Action, never shipped to the browser.
+2. Make sure the workflow lives on the branch GitHub Pages serves (usually
+   `main`) — scheduled runs fire from the default branch. Merge this branch
+   there, then trigger the first run from the **Actions** tab ("Run workflow").
+3. After it commits `data/`, the live site is fully static.
 
 ## Deploy
 
