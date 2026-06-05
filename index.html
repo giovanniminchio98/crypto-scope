@@ -79,6 +79,8 @@
       </div>
 
       <div class="chart-wrap" id="chartWrap">
+        <div id="chartDiv"></div>
+        <div class="chart-legend-ovl" id="chartLegend"></div>
         <div class="loading" id="loading">
           <div class="skel-bars" id="skelBars"></div>
           <div class="loading-ring"></div>
@@ -91,8 +93,6 @@
           <div class="err-msg" id="errMsg">Couldn't reach the market data service.</div>
           <button class="retry-btn" id="retryBtn">Retry</button>
         </div>
-        <canvas id="cv"></canvas>
-        <div id="tooltip"></div>
       </div>
 
       <div class="chart-legend">
@@ -115,12 +115,14 @@
 
   <footer>
     <div class="socials" id="socials">
-      <!-- Social links — replace the X href with your handle -->
-      <a class="social" href="https://x.com/YOUR_HANDLE" aria-label="X / Twitter" target="_blank" rel="noopener" data-net="x">
+      <a class="social" href="https://x.com/giovanniminc?s=11" aria-label="X / Twitter" target="_blank" rel="noopener" data-net="x">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
       </a>
-      <a class="social" href="https://github.com/giovanniminchio98" aria-label="GitHub" target="_blank" rel="noopener" data-net="gh">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58v-2.2c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.21.09 1.84 1.24 1.84 1.24 1.07 1.84 2.81 1.31 3.5 1 .11-.78.42-1.31.76-1.61-2.67-.3-5.47-1.34-5.47-5.95 0-1.31.47-2.39 1.24-3.23-.13-.3-.54-1.52.12-3.17 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.65.25 2.87.12 3.17.77.84 1.24 1.92 1.24 3.23 0 4.62-2.81 5.64-5.49 5.94.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.57C20.56 22.3 24 17.8 24 12.5 24 5.87 18.63.5 12 .5z"/></svg>
+      <a class="social" href="https://www.linkedin.com/in/giovanni-minchio-6958a61b2" aria-label="LinkedIn" target="_blank" rel="noopener" data-net="li">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M20.45 20.45h-3.56v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.34V9h3.42v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.45v6.29zM5.34 7.43a2.07 2.07 0 1 1 0-4.14 2.07 2.07 0 0 1 0 4.14zM7.12 20.45H3.55V9h3.57v11.45zM22.22 0H1.77C.79 0 0 .77 0 1.73v20.54C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.73V1.73C24 .77 23.2 0 22.22 0z"/></svg>
+      </a>
+      <a class="social" href="mailto:gminchiogm@gmail.com" aria-label="Email" data-net="mail">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 6 10 7L22 6"/></svg>
       </a>
     </div>
     <div class="foot-note">CryptoScope · Data via CoinGecko · Quant models are statistical estimates, not financial advice.</div>
@@ -134,6 +136,7 @@
      line below and drop in your Worker URL — the browser then never sees the key.
      Until then, the app falls back to CoinGecko's anonymous (rate-limited) tier. -->
 <!-- <script>window.CRYPTOSCOPE_CONFIG = { apiBase: 'https://cryptoscope-proxy.YOUR-SUBDOMAIN.workers.dev' };</script> -->
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4/dist/lightweight-charts.standalone.production.js" defer></script>
 <script src="oracle.js" defer></script>
 <script src="app.js" defer></script>
 </body>

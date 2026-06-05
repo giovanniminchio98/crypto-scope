@@ -71,14 +71,17 @@ kind of analytics you normally only see in quant terminals:
 - **Live updates** — silent background auto-refresh per timeframe, paused when
   the tab is hidden; live "last updated" indicator and directional price flash.
   A manual **Refresh** button force-bypasses the cache for price + candles.
-- **Smooth rendering** — `requestAnimationFrame`-throttled crosshair,
-  precomputed chart model (so hovering doesn't recompute indicators),
-  devicePixelRatio-aware canvas, on-chart time axis, and debounced resize.
+- **Professional chart** — rendered with [TradingView lightweight-charts]
+  (https://github.com/tradingview/lightweight-charts) (loaded from a CDN, no
+  build step): crisp candles, real time axis, built-in crosshair + OHLC legend,
+  EMA 20/50 overlays, and the Monte-Carlo forecast (median + 5/95% bounds) drawn
+  into the future.
+- **Per-timeframe verdict** — four mini rings on the Oracle Verdict card show the
+  composite score for 1H / 4H / 1D / 1W at a glance (computed in the background).
 - **Remembers your last coin, timeframe, and cone toggle** across reloads.
 
 ### Social links
 
-Footer icons (X, Instagram, Telegram, GitHub) live at the bottom of
-`index.html`. Replace the placeholder `href="#"` values with your handles.
+Footer icons (X, LinkedIn, Email) are at the bottom of `index.html`.
 
 > Quant model output is a statistical estimate, not financial advice.

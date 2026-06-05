@@ -45,8 +45,9 @@ let reqId      = 0;      // monotonically increasing token — guards against st
 let refreshTimer = null;
 let lastUpdated  = 0;
 let lastPrice    = null;
-let model        = null; // precomputed render model (EMAs, cone, scales)
 let oracle       = null; // latest Oracle.analyze() result
+let tfScores     = {};   // { tf: verdictScore } for the current coin
+let tfScoresCoin = null; // coin id those scores belong to
 
 /* ─── Persisted prefs ───────────────────────────────────────────────────────── */
 function loadPrefs() {
@@ -67,21 +68,104 @@ function savePrefs() {
   } catch { /* storage unavailable — ignore */ }
 }
 
-/* ─── Canvas (devicePixelRatio-aware for crisp, non-blurry rendering) ────────── */
-const cv   = document.getElementById('cv');
-const ctx2 = cv.getContext('2d');
-const wrap = document.getElementById('chartWrap');
-let CW = 0, CH = 0; // logical (CSS px) canvas size
+/* ─── Chart (TradingView lightweight-charts — professional rendering) ─────────── */
+let lwChart=null, candleSeries=null, ema20Series=null, ema50Series=null;
+let fcUpper=null, fcLower=null, fcMedian=null;
+let chartReady=false;
 
-function sizeCanvas() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  CW = wrap.clientWidth;
-  CH = wrap.clientHeight;
-  cv.width  = Math.round(CW * dpr);
-  cv.height = Math.round(CH * dpr);
-  cv.style.width  = CW + 'px';
-  cv.style.height = CH + 'px';
-  ctx2.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS pixels
+function initChart() {
+  const el = document.getElementById('chartDiv');
+  if (!el) return;
+  if (!window.LightweightCharts) {
+    el.innerHTML = '<div class="chart-fallback">Chart engine failed to load — check your connection and refresh.</div>';
+    return;
+  }
+  lwChart = LightweightCharts.createChart(el, {
+    autoSize: true,
+    layout: { background:{ type:'solid', color:'#161616' }, textColor:'#7a7a7a', fontFamily:"'DM Mono', monospace", fontSize:11 },
+    grid: { vertLines:{ color:'rgba(255,255,255,0.035)' }, horzLines:{ color:'rgba(255,255,255,0.035)' } },
+    rightPriceScale: { borderColor:'#2a2a2a', scaleMargins:{ top:0.12, bottom:0.12 } },
+    timeScale: { borderColor:'#2a2a2a', timeVisible:true, secondsVisible:false, rightOffset:6, barSpacing:8 },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Normal,
+      vertLine:{ color:'rgba(240,237,232,0.25)', width:1, style:3, labelBackgroundColor:'#2a2a2a' },
+      horzLine:{ color:'rgba(240,237,232,0.25)', width:1, style:3, labelBackgroundColor:'#2a2a2a' },
+    },
+    localization: { priceFormatter: p => fmtPrice(p) },
+  });
+  candleSeries = lwChart.addCandlestickSeries({
+    upColor:'#c8f060', downColor:'#ff6b6b', borderUpColor:'#c8f060', borderDownColor:'#ff6b6b',
+    wickUpColor:'rgba(200,240,96,0.7)', wickDownColor:'rgba(255,107,107,0.75)',
+  });
+  const ln = (color,width,style)=> lwChart.addLineSeries({
+    color, lineWidth:width, lineStyle:style||0,
+    priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false,
+  });
+  ema20Series = ln(EMA20_C, 2);
+  ema50Series = ln(EMA50_C, 2);
+  fcUpper  = ln('rgba(240,184,96,0.4)', 1, 2);
+  fcLower  = ln('rgba(240,184,96,0.4)', 1, 2);
+  fcMedian = ln(AI_C, 2, 2);
+  lwChart.subscribeCrosshairMove(onCrosshair);
+  chartReady = true;
+}
+
+function setChartData(fit) {
+  if (!chartReady || !candleSeries || !ohlcData.length) return;
+  try {
+    // strictly-ascending unique times (lightweight-charts requirement)
+    const seen = new Set(), cd = [], idx = [];
+    ohlcData.forEach((d,i) => {
+      const time = Math.floor(d.t/1000);
+      if (seen.has(time)) return;
+      seen.add(time); cd.push({ time, open:d.o, high:d.h, low:d.l, close:d.c }); idx.push(i);
+    });
+    candleSeries.setData(cd);
+    const closes = ohlcData.map(d=>d.c);
+    const e20 = calcEMA(closes, Math.min(20, closes.length));
+    const e50 = calcEMA(closes, Math.min(50, closes.length));
+    const toLine = arr => idx.map(i => arr[i]!=null ? { time:Math.floor(ohlcData[i].t/1000), value:arr[i] } : null).filter(Boolean);
+    ema20Series.setData(toLine(e20));
+    ema50Series.setData(toLine(e50));
+    updateForecastSeries();
+    updateLegend(ohlcData[ohlcData.length-1]);
+    if (fit) lwChart.timeScale().fitContent();
+  } catch (e) { console.error('chart setData failed:', e); }
+}
+
+function updateForecastSeries() {
+  if (!fcMedian) return;
+  if (coneOn && oracle && oracle.mc && oracle.mc.cone.length > 1 && ohlcData.length) {
+    const barSec = Math.max(1, Math.round(oracle.meta.barMs/1000));
+    const lastT  = Math.floor(ohlcData[ohlcData.length-1].t/1000);
+    const up=[], lo=[], md=[];
+    oracle.mc.cone.forEach((c,i) => {
+      const time = lastT + i*barSec;
+      up.push({ time, value:c.p95 }); lo.push({ time, value:c.p5 }); md.push({ time, value:c.p50 });
+    });
+    fcUpper.setData(up); fcLower.setData(lo); fcMedian.setData(md);
+  } else {
+    fcUpper.setData([]); fcLower.setData([]); fcMedian.setData([]);
+  }
+}
+
+function updateLegend(d) {
+  const el = document.getElementById('chartLegend');
+  if (!el || !d) return;
+  const bull = d.c >= d.o;
+  el.innerHTML =
+    `<span class="lg-t">${fmtFull(d.t)}</span>` +
+    `<span><i>O</i>${fmtUSD(d.o)}</span><span><i>H</i><b style="color:var(--bull)">${fmtUSD(d.h)}</b></span>` +
+    `<span><i>L</i><b style="color:var(--bear)">${fmtUSD(d.l)}</b></span>` +
+    `<span><i>C</i><b style="color:${bull?'var(--bull)':'var(--bear)'}">${fmtUSD(d.c)}</b></span>`;
+  el.classList.add('show');
+}
+
+function onCrosshair(param) {
+  if (!param || !param.time || !param.seriesData) { if (ohlcData.length) updateLegend(ohlcData[ohlcData.length-1]); return; }
+  const d = param.seriesData.get(candleSeries);
+  if (d) updateLegend({ t: (typeof param.time==='number' ? param.time*1000 : Date.now()), o:d.open, h:d.high, l:d.low, c:d.close });
+  else if (ohlcData.length) updateLegend(ohlcData[ohlcData.length-1]);
 }
 
 /* ─── Skeleton bars (decorative) ───────────────────────────────────────────── */
@@ -219,6 +303,7 @@ async function boot() {
   document.querySelectorAll('input[name="tf"]').forEach(r => { r.checked = (+r.value === currentTF); });
   document.getElementById('tfLabel').innerHTML = `Timeframe <strong>${TF_LABELS[currentTF]}</strong>`;
   document.getElementById('aiToggle').classList.toggle('active', coneOn);
+  initChart();
 
   setLive('syncing', 'Connecting…');
   try {
@@ -311,173 +396,6 @@ function calcEMA(vals, period) {
   return out;
 }
 
-/* ─── Build render model (so hover redraws are cheap) ───────────────────────── */
-function rebuildModel() {
-  if (!ohlcData.length) { model = null; return; }
-  const closes = ohlcData.map(d=>d.c);
-  const times  = ohlcData.map(d=>d.t);
-  const e20    = calcEMA(closes, Math.min(20, closes.length));
-  const e50    = calcEMA(closes, Math.min(50, closes.length));
-
-  // Monte-Carlo cone (future) from the Oracle result, only when overlay is on.
-  let cone = null, fcLen = 0;
-  if (coneOn && oracle && oracle.mc && oracle.mc.cone.length > 1) {
-    const dt = oracle.meta.barMs;
-    const lastT = times[times.length-1];
-    cone = oracle.mc.cone.map((c,i) => ({ t:lastT+dt*i, ...c }));
-    fcLen = cone.length - 1;
-  }
-
-  const allY = [...ohlcData.flatMap(d=>[d.h,d.l]), ...e20.filter(Boolean), ...e50.filter(Boolean)];
-  if (cone) cone.forEach(c => allY.push(c.p95, c.p5));
-  const yMin = Math.min(...allY), yMax = Math.max(...allY);
-  const yPad = (yMax-yMin)*0.09 || Math.abs(yMin)*0.05 || 1;
-  const yLo  = yMin-yPad, yHi = yMax+yPad, yRng = yHi-yLo||1;
-
-  const nBars = ohlcData.length + fcLen;
-  model = { closes, times, e20, e50, cone, yLo, yRng, nBars, fcLen };
-}
-
-/* ─── Draw ───────────────────────────────────────────────────────────────────── */
-let _sx, _sy;
-
-function draw(hoverIdx) {
-  if (!model || !ohlcData.length) { ctx2.clearRect(0,0,CW,CH); return; }
-  const W = CW, H = CH;
-  const pw = W - PAD.left - PAD.right;
-  const ph = H - PAD.top  - PAD.bottom;
-  ctx2.clearRect(0, 0, W, H);
-
-  const { e20, e50, cone, yLo, yRng, nBars } = model;
-
-  _sx = i => PAD.left + (i/Math.max(nBars-1,1))*pw;
-  _sy = v => PAD.top  + ph*(1-(v-yLo)/yRng);
-
-  // Grid + Y axis labels
-  for (let i=0;i<=6;i++) {
-    const v = yLo+yRng*(i/6), y = _sy(v);
-    ctx2.strokeStyle=GRID_C; ctx2.lineWidth=1;
-    ctx2.beginPath(); ctx2.moveTo(PAD.left,y); ctx2.lineTo(W-PAD.right,y); ctx2.stroke();
-    ctx2.fillStyle=TICK_C; ctx2.font='10px DM Mono,monospace'; ctx2.textAlign='left';
-    ctx2.fillText(fmtPrice(v), W-PAD.right+6, y+4);
-  }
-
-  // X axis time labels (always-on — grounds the chart in real time)
-  ctx2.fillStyle=TICK_C; ctx2.font='9px DM Mono,monospace'; ctx2.textAlign='center';
-  const xticks = 5;
-  for (let i=0;i<=xticks;i++) {
-    const idx = Math.round((ohlcData.length-1) * i/xticks);
-    const x = _sx(idx);
-    if (x > PAD.left+12 && x < W-PAD.right-12)
-      ctx2.fillText(fmtAxisTime(ohlcData[idx].t), x, H-PAD.bottom+13);
-  }
-
-  // Monte-Carlo cone (behind candles)
-  if (cone && cone.length>1) {
-    const si = ohlcData.length-1;
-    const bandFill = (key1, key2, alpha) => {
-      ctx2.beginPath();
-      cone.forEach((p,fi) => { const x=_sx(si+fi),y=_sy(p[key1]); fi===0?ctx2.moveTo(x,y):ctx2.lineTo(x,y); });
-      for (let fi=cone.length-1;fi>=0;fi--) ctx2.lineTo(_sx(si+fi),_sy(cone[fi][key2]));
-      ctx2.closePath(); ctx2.fillStyle=`rgba(240,184,96,${alpha})`; ctx2.fill();
-    };
-    bandFill('p95','p5', 0.08);    // 90% interval
-    bandFill('p75','p25', 0.16);   // 50% interval
-  }
-
-  // EMAs
-  line(e20, EMA20_C, 1.5);
-  line(e50, EMA50_C, 1.5);
-
-  // Candles
-  const barW = Math.max(1.5, (pw/nBars)*0.65);
-  ohlcData.forEach((d,i) => {
-    const x=_sx(i), yO=_sy(d.o), yC=_sy(d.c), yH=_sy(d.h), yL=_sy(d.l);
-    const bull = d.c>=d.o, col = bull?BULL_C:BEAR_C;
-    if (hoverIdx===i) { ctx2.fillStyle='rgba(255,255,255,0.04)'; ctx2.fillRect(x-barW/2-2,PAD.top,barW+4,ph); }
-    ctx2.strokeStyle=col; ctx2.lineWidth=1;
-    ctx2.beginPath(); ctx2.moveTo(x,yH); ctx2.lineTo(x,yL); ctx2.stroke();
-    ctx2.fillStyle=col; ctx2.fillRect(x-barW/2, Math.min(yO,yC), barW, Math.max(1.5,Math.abs(yC-yO)));
-  });
-
-  // Median projection line + separator + label
-  if (cone && cone.length>1) {
-    const si = ohlcData.length-1;
-    const sepX = _sx(si);
-
-    ctx2.save(); ctx2.strokeStyle='rgba(240,184,96,0.35)'; ctx2.lineWidth=1; ctx2.setLineDash([4,4]);
-    ctx2.beginPath(); ctx2.moveTo(sepX,PAD.top); ctx2.lineTo(sepX,H-PAD.bottom); ctx2.stroke();
-    ctx2.setLineDash([]); ctx2.restore();
-
-    ctx2.fillStyle='rgba(240,184,96,0.6)'; ctx2.font='9px DM Mono,monospace'; ctx2.textAlign='center';
-    ctx2.fillText('▶ MONTE CARLO', (sepX+(W-PAD.right))/2, PAD.top+13);
-
-    ctx2.save();
-    ctx2.strokeStyle=AI_C; ctx2.lineWidth=2; ctx2.setLineDash([7,5]);
-    ctx2.beginPath();
-    cone.forEach((p,fi) => { const x=_sx(si+fi),y=_sy(p.p50); fi===0?ctx2.moveTo(x,y):ctx2.lineTo(x,y); });
-    ctx2.stroke(); ctx2.setLineDash([]); ctx2.restore();
-  }
-
-  // Crosshair + pinned axis labels
-  if (hoverIdx!=null && hoverIdx>=0 && hoverIdx<ohlcData.length) {
-    const d    = ohlcData[hoverIdx];
-    const cx   = _sx(hoverIdx);
-    const cy   = _sy(d.c);
-    const bull = d.c >= d.o;
-
-    ctx2.save();
-    ctx2.strokeStyle='rgba(240,237,232,0.13)'; ctx2.lineWidth=1; ctx2.setLineDash([4,5]);
-    ctx2.beginPath(); ctx2.moveTo(cx,PAD.top); ctx2.lineTo(cx,H-PAD.bottom); ctx2.stroke();
-    ctx2.beginPath(); ctx2.moveTo(PAD.left,cy); ctx2.lineTo(W-PAD.right,cy); ctx2.stroke();
-    ctx2.setLineDash([]);
-
-    ctx2.beginPath(); ctx2.arc(cx,cy,4,0,Math.PI*2);
-    ctx2.fillStyle = bull ? BULL_C : BEAR_C; ctx2.fill();
-
-    const xLbl = fmtFull(d.t);
-    ctx2.font   = '10px DM Mono,monospace';
-    const xTw   = ctx2.measureText(xLbl).width;
-    const xPad  = 7, xBw = xTw+xPad*2, xBh = 18;
-    const xBx   = Math.min(Math.max(cx-xBw/2, PAD.left), W-PAD.right-xBw);
-    const xBy   = H-PAD.bottom+3;
-    ctx2.fillStyle='#2a2a2a'; roundRect(ctx2,xBx,xBy,xBw,xBh,4);
-    ctx2.fillStyle='#f0ede8'; ctx2.textAlign='left';
-    ctx2.fillText(xLbl, xBx+xPad, xBy+13);
-
-    const yLbl = fmtPrice(d.c);
-    const yTw  = ctx2.measureText(yLbl).width;
-    const yBw  = yTw+xPad*2, yBh = 18;
-    const yBx  = W-PAD.right+4;
-    const yBy  = Math.min(Math.max(cy-yBh/2, PAD.top), H-PAD.bottom-yBh);
-    ctx2.fillStyle = bull ? 'rgba(200,240,96,0.92)' : 'rgba(255,107,107,0.92)';
-    roundRect(ctx2,yBx,yBy,yBw,yBh,4);
-    ctx2.fillStyle='#0e0e0e'; ctx2.textAlign='left';
-    ctx2.fillText(yLbl, yBx+xPad, yBy+13);
-
-    ctx2.restore();
-  }
-}
-
-function roundRect(c, x, y, w, h, r) {
-  c.beginPath();
-  c.moveTo(x+r,y); c.lineTo(x+w-r,y); c.arcTo(x+w,y,x+w,y+r,r);
-  c.lineTo(x+w,y+h-r); c.arcTo(x+w,y+h,x+w-r,y+h,r);
-  c.lineTo(x+r,y+h); c.arcTo(x,y+h,x,y+h-r,r);
-  c.lineTo(x,y+r); c.arcTo(x,y,x+r,y,r);
-  c.closePath(); c.fill();
-}
-
-function line(vals, color, width) {
-  ctx2.strokeStyle=color; ctx2.lineWidth=width; ctx2.beginPath();
-  let started=false;
-  vals.forEach((v,i) => {
-    if (v==null){started=false;return;}
-    const x=_sx(i),y=_sy(v);
-    if(!started){ctx2.moveTo(x,y);started=true;} else ctx2.lineTo(x,y);
-  });
-  ctx2.stroke();
-}
 
 /* ════════════════════════════════════════════════════════════════════════════
  * ORACLE DASHBOARD RENDERING
@@ -490,6 +408,9 @@ function scoreColor(s) { return `hsl(${Math.round(s*1.2)}, 65%, 55%)`; } // 0=re
 
 function gaugeSVG(score, color) {
   const cx=110, cy=104, r=88;
+  const s = Math.max(0, Math.min(100, score));
+  const arcLen = Math.PI * r;            // true length of the semicircle
+  const dash   = s / 100 * arcLen;       // fill this many units, rest is gap
   const track = `M ${cx-r} ${cy} A ${r} ${r} 0 0 0 ${cx+r} ${cy}`;
   return `
   <svg class="gauge" viewBox="0 0 220 112" width="100%" height="100%">
@@ -503,10 +424,10 @@ function gaugeSVG(score, color) {
       </linearGradient>
     </defs>
     <!-- dim full track -->
-    <path d="${track}" pathLength="100" fill="none" stroke="#242424" stroke-width="14" stroke-linecap="round"/>
+    <path d="${track}" fill="none" stroke="#242424" stroke-width="14" stroke-linecap="round"/>
     <!-- gradient fill from the left (bear) stopping at the score -->
-    <path d="${track}" pathLength="100" fill="none" stroke="url(#gaugeGrad)" stroke-width="14"
-          stroke-linecap="round" stroke-dasharray="${score} 100"/>
+    <path d="${track}" fill="none" stroke="url(#gaugeGrad)" stroke-width="14" stroke-linecap="round"
+          stroke-dasharray="${dash.toFixed(2)} ${(arcLen + 2).toFixed(2)}"/>
     <!-- score in the centre -->
     <text x="110" y="86" text-anchor="middle" fill="${color}"
           font-family="'DM Serif Display', serif" font-style="italic" font-size="44">${score}</text>
@@ -518,6 +439,47 @@ function gaugeSVG(score, color) {
 /* Two-line caption under each card: what it shows + what it means. */
 function odesc(what, mean) {
   return `<div class="ocard-desc"><span><i>Shows</i>${what}</span><span><i>Means</i>${mean}</span></div>`;
+}
+
+/* Small ring showing the verdict score for one timeframe (null = still loading). */
+function miniRing(tf, score) {
+  const has = score != null;
+  const col = has ? scoreColor(score) : '#3a3a3a';
+  const r = 15, circ = 2 * Math.PI * r, dash = has ? score / 100 * circ : 0;
+  return `<div class="tfm ${tf === currentTF ? 'cur' : ''}" data-tf="${tf}">
+    <svg viewBox="0 0 40 40" width="40" height="40">
+      <circle cx="20" cy="20" r="${r}" fill="none" stroke="#242424" stroke-width="4"/>
+      <circle cx="20" cy="20" r="${r}" fill="none" stroke="${col}" stroke-width="4" stroke-linecap="round"
+        stroke-dasharray="${dash.toFixed(1)} ${circ.toFixed(1)}" transform="rotate(-90 20 20)"/>
+      <text x="20" y="24" text-anchor="middle" font-size="12" fill="${col}" font-family="'DM Mono',monospace">${has ? score : '·'}</text>
+    </svg>
+    <span class="tfm-lbl">${TF_LABELS[tf]}</span>
+  </div>`;
+}
+
+function updateTfCircle(tf, score) {
+  const el = document.querySelector(`.tfm[data-tf="${tf}"]`);
+  if (el) el.outerHTML = miniRing(tf, score);
+}
+
+/* Background: compute the verdict for the other timeframes and fill their rings.
+   Best-effort + gentle pacing so it doesn't trip the rate limit. */
+async function ensureMultiTF(coinId) {
+  if (oracle) { tfScores[currentTF] = oracle.composite.score; updateTfCircle(currentTF, oracle.composite.score); }
+  const myReq = reqId;
+  for (const tf of [1, 4, 24, 168]) {
+    if (tf === currentTF || tfScores[tf] != null) continue;
+    try {
+      const candles = await fetchOHLC(coinId, tf);
+      if (myReq !== reqId || tfScoresCoin !== coinId) return;
+      const r = (window.Oracle && candles.length >= 30) ? Oracle.analyze(candles, { paths: 600 }) : null;
+      tfScores[tf] = r ? r.composite.score : null;
+      updateTfCircle(tf, tfScores[tf]);
+    } catch (e) {
+      updateTfCircle(tf, null);
+    }
+    await sleep(450);
+  }
 }
 
 function probBar(p, dir) {
@@ -582,6 +544,8 @@ function renderOracle(res) {
       <div class="verdict-label" style="color:${col}">${C.label}</div>
       <div class="verdict-conf">Confidence <strong>${C.confidence}%</strong> · ${res.meta.bars} candles</div>
       <div class="verdict-regime">${res.regime.label}</div>
+      <div class="tf-mini-title">Verdict by timeframe</div>
+      <div class="tf-mini" id="tfMini">${[1,4,24,168].map(tf => miniRing(tf, tfScores[tf])).join('')}</div>
     </div>
 
     <!-- PROBABILITIES -->
@@ -714,11 +678,12 @@ function drawDistribution(res) {
 }
 
 /* ─── Compute Oracle + re-render dashboard + rebuild chart model ────────────── */
-function analyzeAndRender() {
+function analyzeAndRender(fit) {
   oracle = (ohlcData.length >= 30 && window.Oracle) ? Oracle.analyze(ohlcData) : null;
+  if (oracle) tfScores[currentTF] = oracle.composite.score;
   renderOracle(oracle);
   document.getElementById('aiBadge').classList.toggle('on', coneOn);
-  rebuildModel();
+  setChartData(fit);
 }
 
 /* ─── Load chart (full load, with spinner) ──────────────────────────────────── */
@@ -730,6 +695,7 @@ async function loadChart({ force = false } = {}) {
   stopAutoRefresh();
   savePrefs();
   lastPrice = null;                       // reset so the price flash isn't misleading across coins
+  if (coinId !== tfScoresCoin) { tfScores = {}; tfScoresCoin = coinId; }  // fresh per-coin TF circles
   const coin = coins.find(c => c.id === coinId);
 
   setLoading(coin ? coin.name : coinId);
@@ -773,10 +739,9 @@ async function loadChart({ force = false } = {}) {
   if (mktRes.status === 'rejected' && mktRes.reason && mktRes.reason.rateLimited)
     toast('Price feed rate limited — chart is current, price may lag.');
 
-  sizeCanvas();
-  analyzeAndRender();
-  draw();
+  analyzeAndRender(true);
   clearLoading();
+  ensureMultiTF(coinId);                 // fill in the per-timeframe verdict circles
 
   lastUpdated = Date.now();
   setLive('', 'Live · just now');
@@ -801,8 +766,7 @@ async function refreshLive() {
     const coin = coins.find(c => c.id === coinId);
     if (coin) refreshBar(coin, false);
 
-    analyzeAndRender();
-    requestDraw();
+    analyzeAndRender(false);
 
     lastUpdated = Date.now();
     setLive('', 'Live · just now');
@@ -831,61 +795,6 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-/* ─── Crosshair / tooltip — rAF-throttled for smoothness ─────────────────────── */
-const tooltip = document.getElementById('tooltip');
-let pendingHover = null;
-let rafQueued = false;
-
-function requestDraw(hoverIdx) {
-  if (rafQueued) return;
-  rafQueued = true;
-  requestAnimationFrame(() => {
-    rafQueued = false;
-    if (pendingHover === 'clear') { tooltip.style.display='none'; draw(); pendingHover=null; return; }
-    if (pendingHover) { renderHover(pendingHover.x, pendingHover.y); pendingHover=null; }
-    else draw(hoverIdx);
-  });
-}
-
-function renderHover(clientX, clientY) {
-  if (!ohlcData.length || isFetching) return;
-  const rect = cv.getBoundingClientRect();
-  const mx   = (clientX - rect.left);
-  const pw   = CW - PAD.left - PAD.right;
-  const idx  = Math.round(((mx - PAD.left) / pw) * (ohlcData.length - 1));
-  if (idx < 0 || idx >= ohlcData.length) { tooltip.style.display='none'; draw(); return; }
-
-  draw(idx);
-
-  const d    = ohlcData[idx];
-  const bull = d.c >= d.o;
-  const ty   = (clientY - rect.top) - 24;
-  const tx   = clientX - rect.left + 18;
-  const tw   = 190;
-  tooltip.style.display = 'block';
-  tooltip.style.left = (tx + tw > rect.width ? tx - tw - 28 : tx) + 'px';
-  tooltip.style.top  = Math.max(4, Math.min(ty, rect.height - 90)) + 'px';
-  tooltip.innerHTML  =
-    `<span style="color:var(--muted);font-size:10px">${fmtFull(d.t)}</span><br>` +
-    `<span style="color:var(--muted)">O</span> <strong>${fmtUSD(d.o)}</strong>&ensp;` +
-    `<span style="color:var(--muted)">H</span> <strong style="color:var(--bull)">${fmtUSD(d.h)}</strong><br>` +
-    `<span style="color:var(--muted)">L</span> <strong style="color:var(--bear)">${fmtUSD(d.l)}</strong>&ensp;` +
-    `<span style="color:var(--muted)">C</span> <strong style="color:${bull?'var(--bull)':'var(--bear)'}">${fmtUSD(d.c)}</strong>`;
-}
-
-function onPointer(clientX, clientY) { pendingHover = { x: clientX, y: clientY }; requestDraw(); }
-function clearHover() { pendingHover = 'clear'; requestDraw(); }
-
-cv.addEventListener('mousemove', e => onPointer(e.clientX, e.clientY));
-cv.addEventListener('mouseleave', clearHover);
-cv.addEventListener('touchmove', e => {
-  e.preventDefault();
-  const t = e.touches[0];
-  onPointer(t.clientX, t.clientY);
-}, { passive: false });
-cv.addEventListener('touchend', clearHover);
-cv.addEventListener('touchcancel', clearHover);
-
 /* ─── Events ─────────────────────────────────────────────────────────────────── */
 document.getElementById('coinSelect').addEventListener('change', () => loadChart());
 
@@ -899,7 +808,8 @@ document.getElementById('aiToggle').addEventListener('click', () => {
   document.getElementById('aiToggle').classList.toggle('active', coneOn);
   document.getElementById('aiBadge').classList.toggle('on', coneOn);
   savePrefs();
-  if (ohlcData.length) { rebuildModel(); requestDraw(); }
+  updateForecastSeries();
+  if (coneOn && lwChart) lwChart.timeScale().fitContent();
 });
 
 document.getElementById('refreshBtn').addEventListener('click', () => {
@@ -913,9 +823,9 @@ document.getElementById('retryBtn').addEventListener('click', () => {
 });
 
 let resizeTimer = null;
-window.addEventListener('resize', () => {
+window.addEventListener('resize', () => {        // chart autosizes itself; just redraw the histogram
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { sizeCanvas(); draw(); if (oracle) drawDistribution(oracle); }, 120);
+  resizeTimer = setTimeout(() => { if (oracle) drawDistribution(oracle); }, 150);
 });
 
 /* ─── Formatters ─────────────────────────────────────────────────────────────── */
