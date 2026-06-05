@@ -145,11 +145,12 @@ function setChartData(fit) {
     updateForecastSeries();
     updateLegend(ohlcData[ohlcData.length-1]);
     if (fit) {
-      // Reset the view on coin/timeframe change: re-fit the time axis AND
-      // re-enable price-axis auto-scaling (a manual drag disables it), so the
-      // chart re-centers on the current price instead of keeping the old view.
-      lwChart.timeScale().fitContent();
+      // Reset the view on coin/timeframe change. Re-enable price-axis auto-scale
+      // FIRST (a manual drag/zoom disables it), then re-fit the time axis — so
+      // the recompute uses auto-scale and the chart re-centers on the new price.
       try { candleSeries.priceScale().applyOptions({ autoScale: true }); } catch (e) {}
+      try { lwChart.priceScale('right').applyOptions({ autoScale: true }); } catch (e) {}
+      lwChart.timeScale().fitContent();
     }
   } catch (e) { console.error('chart setData failed:', e); }
 }
