@@ -144,6 +144,7 @@ function setChartData(fit) {
     ema50Series.setData(toLine(e50));
     updateForecastSeries();
     updateLegend(ohlcData[ohlcData.length-1]);
+    updateTfLabel();   // reflect the ACTUAL candle interval (warns if it differs)
     if (fit) {
       // Reset the view on coin/timeframe change. Re-enable price-axis auto-scale
       // FIRST (a manual drag/zoom disables it), then re-fit the time axis — so
@@ -410,21 +411,39 @@ function refreshBar(coin, shimmerStats) {
  * per-interval candles) → CoinGecko (last resort). Binance is what keeps live
  * browsing from hitting CoinGecko's per-coin rate limit. */
 const BINANCE_INTERVAL = { 1:'1h', 4:'4h', 24:'1d', 168:'1w' };
+// CryptoCompare endpoints giving exact candles per timeframe (keyless fallback).
+const CC_OHLC = { 1:['histohour',1], 4:['histohour',4], 24:['histoday',1], 168:['histoday',7] };
+
+function coinSym(coinId) { const c = coins.find(x => x.id === coinId); return (c && c.symbol ? c.symbol : coinId).toUpperCase(); }
 
 async function fetchOHLCBinance(coinId, tf, { fresh = false } = {}) {
-  const coin = coins.find(c => c.id === coinId);
-  const sym  = (coin && coin.symbol ? coin.symbol : coinId).toUpperCase() + 'USDT';
-  const iv   = BINANCE_INTERVAL[tf] || '1h';
-  const key  = `bz:${sym}:${iv}`;
+  const sym = coinSym(coinId) + 'USDT';
+  const iv  = BINANCE_INTERVAL[tf] || '1h';
+  const key = `bz:${sym}:${iv}`;
   if (fresh) cache.delete(key);
   const raw = await cachedJSON(
     key,
     `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${iv}&limit=300`,
-    OHLC_TTL,
-    { noKey: true, tries: 2, timeout: 9000 }
+    OHLC_TTL, { noKey: true, tries: 2, timeout: 9000 }
   );
   if (!Array.isArray(raw) || !raw.length) throw new Error('Empty Binance OHLC');
   return raw.map(d => ({ t:+d[0], o:+d[1], h:+d[2], l:+d[3], c:+d[4] }));
+}
+
+async function fetchOHLCCC(coinId, tf, { fresh = false } = {}) {
+  const sym = coinSym(coinId);
+  const [path, agg] = CC_OHLC[tf] || ['histohour', 1];
+  const key = `cc:${sym}:${path}:${agg}`;
+  if (fresh) cache.delete(key);
+  const j = await cachedJSON(
+    key,
+    `https://min-api.cryptocompare.com/data/v2/${path}?fsym=${encodeURIComponent(sym)}&tsym=USD&aggregate=${agg}&limit=300`,
+    OHLC_TTL, { noKey: true, tries: 2, timeout: 9000 }
+  );
+  const arr = (j && j.Data && j.Data.Data) || [];
+  const out = arr.filter(d => d && d.close > 0).map(d => ({ t:d.time*1000, o:+d.open, h:+d.high, l:+d.low, c:+d.close }));
+  if (!out.length) throw new Error('Empty CryptoCompare OHLC');
+  return out;
 }
 
 async function fetchOHLC(coinId, tf, { fresh = false } = {}) {
@@ -433,8 +452,10 @@ async function fetchOHLC(coinId, tf, { fresh = false } = {}) {
     if (!Array.isArray(arr) || !arr.length) throw new Error('Empty OHLC');
     return arr.map(d => ({ t:+d[0], o:+d[1], h:+d[2], l:+d[3], c:+d[4] }));
   }
-  // Live: Binance first (not rate-limited), CoinGecko only if Binance is unavailable.
-  try { return await fetchOHLCBinance(coinId, tf, { fresh }); } catch (e) { /* fall back */ }
+  // Live, in order of preference — all give exact 1h/4h/1d/1w candles except the
+  // last. Binance & CryptoCompare aren't rate-limited; CoinGecko is the last resort.
+  try { return await fetchOHLCBinance(coinId, tf, { fresh }); } catch (e) {}
+  try { return await fetchOHLCCC(coinId, tf, { fresh }); } catch (e) {}
   const days = TF_DAYS[tf] || 1;
   const key  = `ohlc:${coinId}:${tf}`;
   if (fresh) cache.delete(key);
@@ -1147,6 +1168,38 @@ function fmtAxisTime(ts) {
 }
 function fmtFull(ts) {
   return new Date(ts).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+
+/* Detect the real candle interval from the data and surface it in the chart
+ * header — so if a coin's source returns a different granularity than the
+ * selected timeframe, the chart says so instead of looking out of sync. */
+const TF_EXPECT_MS = { 1:3600000, 4:14400000, 24:86400000, 168:604800000 };
+function medianIntervalMs() {
+  if (ohlcData.length < 3) return 0;
+  const d = [];
+  for (let i = 1; i < ohlcData.length; i++) d.push(ohlcData[i].t - ohlcData[i-1].t);
+  d.sort((a,b) => a-b);
+  return d[d.length >> 1];
+}
+function fmtInterval(ms) {
+  const m = ms/60000;
+  if (m < 60)  return Math.round(m) + 'm';
+  const h = m/60;
+  if (h < 24)  return Math.round(h) + 'h';
+  const dd = h/24;
+  if (dd < 7)  return Math.round(dd) + 'd';
+  return Math.round(dd/7) + 'w';
+}
+function updateTfLabel() {
+  const el = document.getElementById('tfLabel');
+  if (!el) return;
+  const im = medianIntervalMs(), ex = TF_EXPECT_MS[currentTF];
+  if (im && ex && Math.abs(im - ex) / ex > 0.25) {
+    el.innerHTML = `Timeframe <strong>${TF_LABELS[currentTF]}</strong> · ` +
+      `<span class="tf-warn" title="This coin's data source only offers ${fmtInterval(im)} candles for this range.">⚠ ${fmtInterval(im)} candles</span>`;
+  } else {
+    el.innerHTML = `Timeframe <strong>${TF_LABELS[currentTF]}</strong>`;
+  }
 }
 
 /* ─── Boot ───────────────────────────────────────────────────────────────────── */
