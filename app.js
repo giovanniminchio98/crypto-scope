@@ -250,8 +250,11 @@ function withKey(url) {
   if (!CFG.apiKey) return url;
   return url + (url.includes('?') ? '&' : '?') + 'x_cg_demo_api_key=' + encodeURIComponent(CFG.apiKey);
 }
+function hostOf(url) { try { return new URL(url, location.href).hostname.replace(/^www\./, ''); } catch (e) { return 'server'; } }
+
 async function fetchJSON(url, { tries = 3, timeout = 9000, noKey = false } = {}) {
   let lastErr;
+  const host = hostOf(url);
   for (let attempt = 0; attempt < tries; attempt++) {
     const ctrl = new AbortController();
     const to   = setTimeout(() => ctrl.abort(), timeout);
@@ -262,20 +265,20 @@ async function fetchJSON(url, { tries = 3, timeout = 9000, noKey = false } = {})
         const ra = parseFloat(r.headers.get('retry-after'));
         const wait = (Number.isFinite(ra) ? ra * 1000 : 1500 * (attempt + 1));
         if (attempt < tries - 1) { await sleep(Math.min(wait, 8000)); continue; }
-        throw new RateLimitError();
+        throw new RateLimitError(host);
       }
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (!r.ok) { const e = new Error(`HTTP ${r.status} from ${host}`); e.status = r.status; throw e; }
       return await r.json();
     } catch (e) {
       clearTimeout(to);
-      lastErr = e;
+      lastErr = (e && e.name === 'AbortError') ? new Error(`timeout (${timeout}ms) from ${host}`) : e;
       if (attempt < tries - 1) await sleep(250 * Math.pow(2, attempt));
     }
   }
-  throw lastErr || new Error('Request failed');
+  throw lastErr || new Error(`request to ${host} failed`);
 }
 function sleep(ms) { return new Promise(res => setTimeout(res, ms)); }
-class RateLimitError extends Error { constructor(){ super('Rate limited'); this.rateLimited = true; } }
+class RateLimitError extends Error { constructor(host){ super(`rate limited (429)${host ? ' by ' + host : ''}`); this.rateLimited = true; } }
 
 /* ─── Tiny TTL cache ────────────────────────────────────────────────────────── */
 const cache = new Map();
@@ -449,19 +452,31 @@ async function fetchOHLCCC(coinId, tf, { fresh = false } = {}) {
 async function fetchOHLC(coinId, tf, { fresh = false } = {}) {
   if (STATIC && BUNDLE) {                    // from the in-memory bundle — no network
     const arr = BUNDLE.ohlc && BUNDLE.ohlc[coinId] && BUNDLE.ohlc[coinId][tf];
-    if (!Array.isArray(arr) || !arr.length) throw new Error('Empty OHLC');
+    if (!Array.isArray(arr) || !arr.length) throw new Error(`no candles for ${coinSym(coinId)} in the pre-fetched data`);
     return arr.map(d => ({ t:+d[0], o:+d[1], h:+d[2], l:+d[3], c:+d[4] }));
   }
-  // Live, in order of preference — all give exact 1h/4h/1d/1w candles except the
-  // last. Binance & CryptoCompare aren't rate-limited; CoinGecko is the last resort.
-  try { return await fetchOHLCBinance(coinId, tf, { fresh }); } catch (e) {}
-  try { return await fetchOHLCCC(coinId, tf, { fresh }); } catch (e) {}
-  const days = TF_DAYS[tf] || 1;
-  const key  = `ohlc:${coinId}:${tf}`;
-  if (fresh) cache.delete(key);
-  const raw = await cachedJSON(key, `${API}/coins/${coinId}/ohlc?vs_currency=usd&days=${days}`, OHLC_TTL);
-  if (!Array.isArray(raw) || raw.length === 0) throw new Error('Empty OHLC');
-  return raw.map(d => ({ t:+d[0], o:+d[1], h:+d[2], l:+d[3], c:+d[4] }));
+  // Live, in order of preference. Collect each source's error so we can report
+  // precisely what failed if they all do.
+  const errs = []; let rateLimited = false;
+  for (const [name, fn] of [['Binance', fetchOHLCBinance], ['CryptoCompare', fetchOHLCCC]]) {
+    try { return await fn(coinId, tf, { fresh }); }
+    catch (e) { if (e && e.rateLimited) rateLimited = true; errs.push(`${name}: ${(e && e.message) || e}`); }
+  }
+  try {
+    const days = TF_DAYS[tf] || 1;
+    const key  = `ohlc:${coinId}:${tf}`;
+    if (fresh) cache.delete(key);
+    const raw = await cachedJSON(key, `${API}/coins/${coinId}/ohlc?vs_currency=usd&days=${days}`, OHLC_TTL);
+    if (!Array.isArray(raw) || raw.length === 0) throw new Error('empty response');
+    return raw.map(d => ({ t:+d[0], o:+d[1], h:+d[2], l:+d[3], c:+d[4] }));
+  } catch (e) {
+    if (e && e.rateLimited) rateLimited = true;
+    errs.push(`CoinGecko: ${(e && e.message) || e}`);
+  }
+  const err = new Error(`all candle sources failed for ${coinSym(coinId)} — ${errs.join(' · ')}`);
+  err.detail = errs.join(' · ');
+  err.rateLimited = rateLimited;
+  throw err;
 }
 
 /* ─── Top-20 markets snapshot (one source covers every coin) ─────────────────── */
@@ -707,7 +722,7 @@ async function loadSeasonal(coinId) {
   } catch (e) {
     if (myReq !== reqId) return;
     seasonal = null; seasonalCoin = coinId;
-    renderSeasonal(null, { kind: 'error', name });
+    renderSeasonal(null, { kind: 'error', name, detail: (e && (e.detail || e.message)) || 'history request failed' });
   }
 }
 
@@ -719,7 +734,7 @@ function renderSeasonal(s, info) {
     const name = (info && info.name) || 'this coin';
     let msg;
     if (info && info.kind === 'error') {
-      msg = `Couldn’t load price history for <b>${name}</b> — it may not be listed on the history provider.`;
+      msg = `Couldn’t load price history for <b>${name}</b>.<br><span class="seas-err">${info.detail || 'it may not be listed on the history provider'}</span>`;
     } else if (info && info.kind === 'tooNew') {
       const span = info.years < 1 ? `${Math.max(1, Math.round(info.years*12))} months` : `${info.years.toFixed(1)} years`;
       msg = `⏳ <b>Not available yet — ${name} is too new.</b><br>We only have about ${span} of price history, and a seasonal read needs at least ~2 years of data to compare cycles.`;
@@ -1057,19 +1072,18 @@ async function loadChart({ force = false } = {}) {
 
   if (ohlcRes.status === 'rejected') {
     const e = ohlcRes.reason || {};
-    console.error('OHLC fetch failed:', e);
+    const detail = e.detail || e.message || 'unknown error';
+    console.error('OHLC fetch failed:', detail, e);
     // Only keep what's on screen if it's the SAME coin (a refresh that failed).
     // On a coin/timeframe switch, never show another coin's data — show an error.
     if (ohlcData.length && ohlcCoin === coinId) {
       clearLoading();
       setLive('stale', 'Update failed');
-      toast(e.rateLimited ? 'Rate limited — showing last data.' : 'Update failed — showing last data.');
+      toast('Update failed — showing last data · ' + detail);
       startAutoRefresh();
     } else {
       ohlcData = []; ohlcCoin = null;
-      showError(e.rateLimited
-        ? 'CoinGecko rate limit hit. Wait a few seconds, then try again.'
-        : 'Couldn’t load chart data for this coin.');
+      showError(`Couldn’t load ${currentCoinName || coinId} (${TF_LABELS[currentTF]}).\n${detail}`);
     }
     return;
   }
