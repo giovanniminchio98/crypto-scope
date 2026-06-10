@@ -513,15 +513,20 @@ async function refreshMarkets(force = false) {
  * keyless, CORS-friendly and returns full history (BTC back to 2010) — and it
  * doesn't touch the CoinGecko quota. One cached call per coin (6h TTL). */
 async function fetchHistory(coinId) {
-  if (STATIC && BUNDLE) {                    // from the in-memory bundle — no network
+  if (STATIC && BUNDLE) {
     const pr = BUNDLE.history && BUNDLE.history[coinId];
     if (Array.isArray(pr) && pr.length) {
       const out = pr.map(p => ({ t: +p[0], price: +p[1] })).filter(d => d.price > 0);
-      if (out.length) return out;
+      // Use the bundle's history only if it spans enough for seasonality (~2y).
+      // CoinGecko's free tier caps it at 365 days, so otherwise fetch the full
+      // multi-year history from CryptoCompare in the browser (works there even
+      // though it's blocked from GitHub's IP).
+      const spanY = out.length ? (out[out.length-1].t - out[0].t) / (365 * 86400000) : 0;
+      if (out.length && spanY >= 1.8) return out;
     }
-    throw new Error('No history');
+    // else fall through to the live multi-year source
   }
-  // Live fallback: CryptoCompare histoday (keyless, full history)
+  // CryptoCompare histoday (keyless, full history — works from browsers)
   const coin = coins.find(c => c.id === coinId);
   const sym  = (coin && coin.symbol ? coin.symbol : coinId).toUpperCase();
   const raw  = await cachedJSON(
