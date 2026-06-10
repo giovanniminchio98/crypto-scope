@@ -27,13 +27,8 @@ jobs:
       - name: Fetch data
         env:
           # CoinGecko demo key from the COIN_GEKO_FREE_API repo secret, with an
-          # inline fallback. Free-tier key (no billing attached) — worst case it
-          # gets rate-limited and we rotate it. The job also runs fully keyless
-          # via CryptoCompare fallbacks if the key ever stops working.
+          # inline fallback. Free-tier key (no billing attached).
           CG_KEY: ${{ secrets.COIN_GEKO_FREE_API || 'CG-q9H92pU2KJ6DMcwnVLTuBm31' }}
-          # Optional free CryptoCompare key — only needed if their keyless calls
-          # ever get refused from GitHub's IPs (Kraken covers candles either way).
-          CC_KEY: ${{ secrets.CRYPTOCOMPARE_API_KEY || '' }}
         run: node scripts/fetch-data.mjs
 
       - name: Commit data
