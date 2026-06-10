@@ -1,38 +1,83 @@
 /* ─────────────────────────────────────────────────────────────────────────────
  * CryptoScope — daily data fetcher (runs in GitHub Actions, not in the browser).
  *
- * Pulls everything the app needs for the top-20 coins and writes it as static
- * JSON into ./data, so the deployed site makes ZERO API calls at runtime — the
- * number of CoinGecko calls is fixed per run, independent of how many people
- * visit. The CoinGecko key is read from the CG_KEY secret (server-side only).
+ * Pulls everything the app needs for the top-20 coins and writes one static
+ * bundle, so the deployed site makes ZERO API calls at runtime regardless of
+ * traffic. Prices come from CoinGecko (markets, needs the CG_API_KEY secret);
+ * candles + history come from CryptoCompare (keyless, exact per-interval candles).
  *
  * Output:
- *   data/markets.json            — raw CoinGecko top-20 markets
- *   data/ohlc/<id>-<tf>.json     — raw CoinGecko OHLC per coin & timeframe
- *   data/history/<id>.json       — { prices: [[tsMs, price], ...] } (weekly)
- *   data/meta.json               — { generatedAt, coins, ok, fail }
+ *   data/bundle.json — { generatedAt, intervalHours, coins, markets,
+ *                        ohlc:{ <id>:{ <tf>:[[t,o,h,l,c],...] } },
+ *                        history:{ <id>:[[t,price],...] } }
+ *   data/meta.json   — { generatedAt, intervalHours, coins, ok, fail }
  * ───────────────────────────────────────────────────────────────────────────── */
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
 
 const CG  = 'https://api.coingecko.com/api/v3';
+const CC  = 'https://min-api.cryptocompare.com/data';
 const KEY = process.env.CG_KEY || '';
 const OUT = 'data';
-const TF_DAYS = { '1': 1, '4': 7, '24': 30, '168': 180 };   // must match the app
+// CryptoCompare endpoints giving EXACT candles for each timeframe (keyless).
+const TF_CC = { '1': ['histohour', 1], '4': ['histohour', 4], '24': ['histoday', 1], '168': ['histoday', 7] };
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const withKey = u => KEY ? u + (u.includes('?') ? '&' : '?') + 'x_cg_demo_api_key=' + KEY : u;
 
 async function getJSON(url, { tries = 4, noKey = false } = {}) {
-  let lastErr;
+  let lastErr = new Error('request failed');
   for (let i = 0; i < tries; i++) {
     try {
       const r = await fetch(noKey ? url : withKey(url), { headers: { accept: 'application/json' } });
-      if (r.status === 429) { await sleep(4000 * (i + 1)); continue; }
+      if (r.status === 429) { lastErr = new Error('HTTP 429 (rate limited)'); await sleep(4000 * (i + 1)); continue; }
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return await r.json();
-    } catch (e) { lastErr = e; if (i < tries - 1) await sleep(1500 * (i + 1)); }
+    } catch (e) { lastErr = e || lastErr; if (i < tries - 1) await sleep(1500 * (i + 1)); }
   }
   throw lastErr;
+}
+
+// Exact OHLC candles from CryptoCompare (keyless, true per-interval).
+async function ccOHLC(sym, tf) {
+  const [path, agg] = TF_CC[tf];
+  const j = await getJSON(`${CC}/v2/${path}?fsym=${encodeURIComponent(sym)}&tsym=USD&aggregate=${agg}&limit=300`, { noKey: true });
+  const arr = (j && j.Data && j.Data.Data) || [];
+  return arr.filter(d => d && d.close > 0).map(d => [d.time * 1000, d.open, d.high, d.low, d.close]);
+}
+
+// Map CryptoCompare's top-by-mcap rows to the CoinGecko markets shape the app uses.
+function ccToMarkets(rows) {
+  return rows.filter(x => x && x.RAW && x.RAW.USD && x.CoinInfo).map(x => {
+    const i = x.CoinInfo, u = x.RAW.USD;
+    return {
+      id: i.Name.toLowerCase(),                  // symbol-based id (consistent across runs)
+      symbol: i.Name.toLowerCase(),
+      name: i.FullName || i.Name,
+      image: i.ImageUrl ? 'https://www.cryptocompare.com' + i.ImageUrl : '',
+      current_price: u.PRICE,
+      market_cap: u.MKTCAP,
+      total_volume: u.TOTALVOLUME24HTO,
+      high_24h: u.HIGH24HOUR,
+      low_24h: u.LOW24HOUR,
+      price_change_percentage_24h: u.CHANGEPCT24HOUR,
+    };
+  });
+}
+
+async function fetchMarkets(prev) {
+  // 1) CoinGecko — best fidelity; works reliably when the CG_API_KEY secret is set.
+  try {
+    const m = await getJSON(`${CG}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`);
+    if (Array.isArray(m) && m.length) return m;
+  } catch (e) { console.error('CoinGecko markets failed:', e && e.message); }
+  // 2) CryptoCompare top-by-mcap — keyless, so the job succeeds without any secret.
+  try {
+    const j = await getJSON(`${CC}/top/mcapfull?limit=20&tsym=USD`, { noKey: true });
+    const m = ccToMarkets((j && j.Data) || []);
+    if (m.length) { console.log('Using CryptoCompare markets fallback (keyless).'); return m; }
+  } catch (e) { console.error('CryptoCompare markets failed:', e && e.message); }
+  // 3) Previous bundle.
+  return prev.markets;
 }
 
 async function main() {
@@ -44,10 +89,8 @@ async function main() {
   try { prev = JSON.parse(await readFile(`${OUT}/bundle.json`, 'utf8')); } catch (e) { /* first run */ }
 
   console.log('Fetching markets…');
-  let markets;
-  try { markets = await getJSON(`${CG}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`); }
-  catch (e) { console.error('markets fail, reusing previous:', e.message); markets = prev.markets; }
-  if (!Array.isArray(markets) || !markets.length) throw new Error('No markets and no previous bundle');
+  const markets = await fetchMarkets(prev);
+  if (!Array.isArray(markets) || !markets.length) throw new Error('No markets from any provider and no previous bundle');
   const ids = markets.map(c => c.id);
 
   // One bundle holds everything for every coin → the site loads it once.
@@ -55,29 +98,33 @@ async function main() {
 
   let ok = 0, fail = 0, carried = 0;
   for (const c of markets) {
+    const sym = (c.symbol || c.id).toUpperCase();
     bundle.ohlc[c.id] = {};
-    for (const [tf, days] of Object.entries(TF_DAYS)) {
+    // Candles from CryptoCompare → exact 1h/4h/1d/1w (keyless, not rate-limited).
+    for (const tf of Object.keys(TF_CC)) {
       try {
-        bundle.ohlc[c.id][tf] = await getJSON(`${CG}/coins/${c.id}/ohlc?vs_currency=usd&days=${days}`);
-        ok++;
+        const candles = await ccOHLC(sym, tf);
+        if (candles.length) { bundle.ohlc[c.id][tf] = candles; ok++; }
+        else throw new Error('empty');
       } catch (e) {
         const old = prev.ohlc && prev.ohlc[c.id] && prev.ohlc[c.id][tf];
         if (old) { bundle.ohlc[c.id][tf] = old; carried++; }
-        else { console.error('  OHLC fail (no carry-forward)', c.id, tf, e.message); fail++; }
+        else { console.error('  OHLC fail', c.id, tf, e && e.message); fail++; }
       }
-      await sleep(2400);  // stay well under the demo-tier rate limit
+      await sleep(250);
     }
-    // Long history from CryptoCompare (keyless), downsampled to weekly to keep the bundle lean.
+    // Long history (weekly) from CryptoCompare to keep the bundle lean.
     try {
-      const sym = (c.symbol || c.id).toUpperCase();
-      const cc = await getJSON(`https://min-api.cryptocompare.com/data/v2/histoday?fsym=${encodeURIComponent(sym)}&tsym=USD&allData=true`, { noKey: true });
+      const cc = await getJSON(`${CC}/v2/histoday?fsym=${encodeURIComponent(sym)}&tsym=USD&allData=true`, { noKey: true });
       const arr = (cc && cc.Data && cc.Data.Data) || [];
-      bundle.history[c.id] = arr.filter((d, i) => d && d.close > 0 && i % 7 === 0).map(d => [d.time * 1000, +d.close]);
+      const weekly = arr.filter((d, i) => d && d.close > 0 && i % 7 === 0).map(d => [d.time * 1000, +d.close]);
+      if (weekly.length) bundle.history[c.id] = weekly;
+      else if (prev.history && prev.history[c.id]) { bundle.history[c.id] = prev.history[c.id]; carried++; }
     } catch (e) {
       if (prev.history && prev.history[c.id]) { bundle.history[c.id] = prev.history[c.id]; carried++; }
-      else console.error('  history fail (no carry-forward)', c.id, e.message);
+      else console.error('  history fail', c.id, e && e.message);
     }
-    await sleep(1200);
+    await sleep(250);
   }
 
   await writeFile(`${OUT}/bundle.json`, JSON.stringify(bundle));

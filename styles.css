@@ -128,6 +128,7 @@ select:disabled { opacity: 0.5; cursor: not-allowed; }
 /* Chart timeframe label shown inside chart header */
 .tf-label { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 .tf-label strong { color: var(--accent2); }
+.tf-warn { color: var(--accent2); }
 
 /* Live / last-updated indicator */
 .live-tag { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); display:flex; align-items:center; gap:7px; }
