@@ -45,6 +45,41 @@ async function ccOHLC(sym, tf) {
   return arr.filter(d => d && d.close > 0).map(d => [d.time * 1000, d.open, d.high, d.low, d.close]);
 }
 
+// Map CryptoCompare's top-by-mcap rows to the CoinGecko markets shape the app uses.
+function ccToMarkets(rows) {
+  return rows.filter(x => x && x.RAW && x.RAW.USD && x.CoinInfo).map(x => {
+    const i = x.CoinInfo, u = x.RAW.USD;
+    return {
+      id: i.Name.toLowerCase(),                  // symbol-based id (consistent across runs)
+      symbol: i.Name.toLowerCase(),
+      name: i.FullName || i.Name,
+      image: i.ImageUrl ? 'https://www.cryptocompare.com' + i.ImageUrl : '',
+      current_price: u.PRICE,
+      market_cap: u.MKTCAP,
+      total_volume: u.TOTALVOLUME24HTO,
+      high_24h: u.HIGH24HOUR,
+      low_24h: u.LOW24HOUR,
+      price_change_percentage_24h: u.CHANGEPCT24HOUR,
+    };
+  });
+}
+
+async function fetchMarkets(prev) {
+  // 1) CoinGecko — best fidelity; works reliably when the CG_API_KEY secret is set.
+  try {
+    const m = await getJSON(`${CG}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`);
+    if (Array.isArray(m) && m.length) return m;
+  } catch (e) { console.error('CoinGecko markets failed:', e && e.message); }
+  // 2) CryptoCompare top-by-mcap — keyless, so the job succeeds without any secret.
+  try {
+    const j = await getJSON(`${CC}/top/mcapfull?limit=20&tsym=USD`, { noKey: true });
+    const m = ccToMarkets((j && j.Data) || []);
+    if (m.length) { console.log('Using CryptoCompare markets fallback (keyless).'); return m; }
+  } catch (e) { console.error('CryptoCompare markets failed:', e && e.message); }
+  // 3) Previous bundle.
+  return prev.markets;
+}
+
 async function main() {
   await mkdir(OUT, { recursive: true });
 
@@ -54,10 +89,8 @@ async function main() {
   try { prev = JSON.parse(await readFile(`${OUT}/bundle.json`, 'utf8')); } catch (e) { /* first run */ }
 
   console.log('Fetching markets…');
-  let markets;
-  try { markets = await getJSON(`${CG}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`); }
-  catch (e) { console.error('markets fail, reusing previous:', e && e.message); markets = prev.markets; }
-  if (!Array.isArray(markets) || !markets.length) throw new Error('No markets and no previous bundle (set the CG_API_KEY secret?)');
+  const markets = await fetchMarkets(prev);
+  if (!Array.isArray(markets) || !markets.length) throw new Error('No markets from any provider and no previous bundle');
   const ids = markets.map(c => c.id);
 
   // One bundle holds everything for every coin → the site loads it once.

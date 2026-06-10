@@ -468,10 +468,34 @@ async function fetchOHLC(coinId, tf, { fresh = false } = {}) {
 const MARKETS_URL =
   `${API}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h`;
 
+// Map CryptoCompare top-by-mcap rows to the CoinGecko markets shape we use everywhere.
+function ccToMarkets(rows) {
+  return rows.filter(x => x && x.RAW && x.RAW.USD && x.CoinInfo).map(x => {
+    const i = x.CoinInfo, u = x.RAW.USD;
+    return {
+      id: i.Name.toLowerCase(), symbol: i.Name.toLowerCase(), name: i.FullName || i.Name,
+      image: i.ImageUrl ? 'https://www.cryptocompare.com' + i.ImageUrl : '',
+      current_price: u.PRICE, market_cap: u.MKTCAP, total_volume: u.TOTALVOLUME24HTO,
+      high_24h: u.HIGH24HOUR, low_24h: u.LOW24HOUR, price_change_percentage_24h: u.CHANGEPCT24HOUR,
+    };
+  });
+}
+
 async function loadMarketsArray(force = false) {
   if (STATIC && BUNDLE) return BUNDLE.markets;   // from memory
   if (force) cache.delete('markets');
-  return cachedJSON('markets', MARKETS_URL, MARKETS_TTL);
+  try {
+    const m = await cachedJSON('markets', MARKETS_URL, MARKETS_TTL);
+    if (Array.isArray(m) && m.length) return m;
+  } catch (e) { /* fall through to keyless source */ }
+  // CryptoCompare fallback — keyless, so a CoinGecko rate limit can't blank the app.
+  if (force) cache.delete('marketsCC');
+  const j = await cachedJSON('marketsCC',
+    'https://min-api.cryptocompare.com/data/top/mcapfull?limit=20&tsym=USD',
+    MARKETS_TTL, { noKey: true, tries: 2, timeout: 9000 });
+  const m = ccToMarkets((j && j.Data) || []);
+  if (!m.length) throw new Error('No market data');
+  return m;
 }
 
 async function refreshMarkets(force = false) {
@@ -668,7 +692,8 @@ async function loadSeasonal(coinId) {
   try {
     const hist = await fetchHistory(coinId);
     if (myReq !== reqId) return;
-    seasonal = window.Seasonal ? Seasonal.analyze(hist, { isBTC: coinId === 'bitcoin', coinName: name }) : null;
+    const isBTC = coin ? String(coin.symbol).toLowerCase() === 'btc' : coinId === 'bitcoin';
+    seasonal = window.Seasonal ? Seasonal.analyze(hist, { isBTC, coinName: name }) : null;
     seasonalCoin = coinId;
     if (seasonal) { renderSeasonal(seasonal); return; }
     // Have history, but not enough for a seasonal read — explain why.
