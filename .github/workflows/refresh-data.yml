@@ -26,11 +26,11 @@ jobs:
 
       - name: Fetch data
         env:
-          # CoinGecko demo key. The CG_API_KEY repo secret takes precedence if set;
-          # otherwise the inline demo key is used. It's a free-tier key (no billing
-          # attached) — worst case it gets rate-limited and we rotate it. The job
-          # also runs fully keyless via CryptoCompare fallbacks if this ever stops.
-          CG_KEY: ${{ secrets.CG_API_KEY || 'CG-q9H92pU2KJ6DMcwnVLTuBm31' }}
+          # CoinGecko demo key from the COIN_GEKO_FREE_API repo secret, with an
+          # inline fallback. Free-tier key (no billing attached) — worst case it
+          # gets rate-limited and we rotate it. The job also runs fully keyless
+          # via CryptoCompare fallbacks if the key ever stops working.
+          CG_KEY: ${{ secrets.COIN_GEKO_FREE_API || 'CG-q9H92pU2KJ6DMcwnVLTuBm31' }}
         run: node scripts/fetch-data.mjs
 
       - name: Commit data
