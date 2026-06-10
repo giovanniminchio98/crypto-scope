@@ -541,20 +541,42 @@ async function fetchHistory(coinId) {
     }
     // else fall through to the live multi-year source
   }
-  // CryptoCompare histoday (keyless, full history — works from browsers)
-  const coin = coins.find(c => c.id === coinId);
-  const sym  = (coin && coin.symbol ? coin.symbol : coinId).toUpperCase();
-  const raw  = await cachedJSON(
+  // Browser multi-year history, in order of preference. Binance weekly (back to
+  // listing, ~years) is primary; CryptoCompare (deeper, back to ~2010) is the
+  // fallback. Each source's error is collected so we can report precisely.
+  const errs = [];
+  for (const [name, fn] of [['Binance', fetchHistoryBinance], ['CryptoCompare', fetchHistoryCC]]) {
+    try { const h = await fn(coinId); if (h && h.length) return h; throw new Error('empty'); }
+    catch (e) { errs.push(`${name}: ${(e && e.message) || e}`); }
+  }
+  const err = new Error(`history failed for ${coinSym(coinId)} — ${errs.join(' · ')}`);
+  err.detail = errs.join(' · ');
+  throw err;
+}
+
+// Binance weekly klines → multi-year weekly closes (keyless, ~back to listing).
+async function fetchHistoryBinance(coinId) {
+  const sym = coinSym(coinId) + 'USDT';
+  const raw = await cachedJSON(
+    `bzh:${sym}`,
+    `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1w&limit=1000`,
+    HIST_TTL, { noKey: true, tries: 2, timeout: 12000 }
+  );
+  if (!Array.isArray(raw) || !raw.length) throw new Error('empty');
+  return raw.map(d => ({ t: +d[0], price: +d[4] })).filter(d => d.price > 0);
+}
+
+// CryptoCompare full daily history (deeper, back to ~2010; works from browsers).
+async function fetchHistoryCC(coinId) {
+  const sym = coinSym(coinId);
+  const raw = await cachedJSON(
     `hist:${sym}`,
     `https://min-api.cryptocompare.com/data/v2/histoday?fsym=${encodeURIComponent(sym)}&tsym=USD&allData=true`,
-    HIST_TTL,
-    { tries: 2, timeout: 12000, noKey: true }
+    HIST_TTL, { tries: 2, timeout: 12000, noKey: true }
   );
   const arr = raw && raw.Data && raw.Data.Data;
-  if (!Array.isArray(arr)) throw new Error('No history');
-  const out = arr.filter(d => d && d.close > 0).map(d => ({ t: d.time * 1000, price: +d.close }));
-  if (!out.length) throw new Error('No history');   // symbol not listed on the provider
-  return out;                                       // may be short — caller measures span
+  if (!Array.isArray(arr) || !arr.length) throw new Error('empty');
+  return arr.filter(d => d && d.close > 0).map(d => ({ t: d.time * 1000, price: +d.close }));
 }
 
 /* ─── EMA (for chart overlay lines only — Oracle computes its own) ──────────── */
