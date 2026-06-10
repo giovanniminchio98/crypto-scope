@@ -16,13 +16,18 @@ import { writeFile, mkdir, readFile } from 'node:fs/promises';
 
 const CG  = 'https://api.coingecko.com/api/v3';
 const CC  = 'https://min-api.cryptocompare.com/data';
-const KEY = process.env.CG_KEY || '';
+const KEY   = process.env.CG_KEY || '';
+const CCKEY = process.env.CC_KEY || '';   // optional free CryptoCompare key
 const OUT = 'data';
-// CryptoCompare endpoints giving EXACT candles for each timeframe (keyless).
+// CryptoCompare endpoints giving EXACT candles for each timeframe.
 const TF_CC = { '1': ['histohour', 1], '4': ['histohour', 4], '24': ['histoday', 1], '168': ['histoday', 7] };
+// Kraken fallback (keyless public API, exact intervals, not geo/datacenter-blocked).
+const TF_KRAKEN = { '1': 60, '4': 240, '24': 1440, '168': 10080 };
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const withKey = u => KEY ? u + (u.includes('?') ? '&' : '?') + 'x_cg_demo_api_key=' + KEY : u;
+// CryptoCompare may 401 keyless calls from datacenter IPs — attach the key if provided.
+const ccUrl = u => CCKEY ? u + (u.includes('?') ? '&' : '?') + 'api_key=' + CCKEY : u;
 
 async function getJSON(url, { tries = 4, noKey = false } = {}) {
   let lastErr = new Error('request failed');
@@ -37,12 +42,42 @@ async function getJSON(url, { tries = 4, noKey = false } = {}) {
   throw lastErr;
 }
 
-// Exact OHLC candles from CryptoCompare (keyless, true per-interval).
+// Exact OHLC candles from CryptoCompare (true per-interval).
 async function ccOHLC(sym, tf) {
   const [path, agg] = TF_CC[tf];
-  const j = await getJSON(`${CC}/v2/${path}?fsym=${encodeURIComponent(sym)}&tsym=USD&aggregate=${agg}&limit=300`, { noKey: true });
+  const j = await getJSON(ccUrl(`${CC}/v2/${path}?fsym=${encodeURIComponent(sym)}&tsym=USD&aggregate=${agg}&limit=300`), { noKey: true });
   const arr = (j && j.Data && j.Data.Data) || [];
-  return arr.filter(d => d && d.close > 0).map(d => [d.time * 1000, d.open, d.high, d.low, d.close]);
+  const out = arr.filter(d => d && d.close > 0).map(d => [d.time * 1000, d.open, d.high, d.low, d.close]);
+  if (!out.length) throw new Error('empty CC OHLC');
+  return out;
+}
+
+// Kraken public OHLC fallback — exact 1h/4h/1d/1w, keyless, works from runners.
+async function krakenOHLC(sym, tf) {
+  const j = await getJSON(`https://api.kraken.com/0/public/OHLC?pair=${encodeURIComponent(sym + 'USD')}&interval=${TF_KRAKEN[tf]}`, { noKey: true, tries: 2 });
+  if (j && Array.isArray(j.error) && j.error.length) throw new Error(j.error[0]);
+  const result = (j && j.result) || {};
+  const k = Object.keys(result).find(x => x !== 'last');
+  const arr = (k && result[k]) || [];
+  const out = arr.filter(d => d && +d[4] > 0).map(d => [d[0] * 1000, +d[1], +d[2], +d[3], +d[4]]).slice(-300);
+  if (!out.length) throw new Error('empty Kraken OHLC');
+  return out;
+}
+
+// Full daily history with graceful degradation: allData → last 2000 days.
+async function ccHistory(sym) {
+  let arr = null;
+  try {
+    const j = await getJSON(ccUrl(`${CC}/v2/histoday?fsym=${encodeURIComponent(sym)}&tsym=USD&allData=true`), { noKey: true, tries: 2 });
+    arr = (j && j.Data && j.Data.Data) || null;
+  } catch (e) { /* allData may be rejected keyless from datacenter IPs */ }
+  if (!arr || !arr.length) {
+    const j = await getJSON(ccUrl(`${CC}/v2/histoday?fsym=${encodeURIComponent(sym)}&tsym=USD&limit=2000`), { noKey: true, tries: 2 });
+    arr = (j && j.Data && j.Data.Data) || [];
+  }
+  const weekly = arr.filter((d, i) => d && d.close > 0 && i % 7 === 0).map(d => [d.time * 1000, +d.close]);
+  if (!weekly.length) throw new Error('empty history');
+  return weekly;
 }
 
 // Map CryptoCompare's top-by-mcap rows to the CoinGecko markets shape the app uses.
@@ -100,26 +135,28 @@ async function main() {
   for (const c of markets) {
     const sym = (c.symbol || c.id).toUpperCase();
     bundle.ohlc[c.id] = {};
-    // Candles from CryptoCompare → exact 1h/4h/1d/1w (keyless, not rate-limited).
+    // Candles: CryptoCompare → Kraken → previous bundle. Both give exact 1h/4h/1d/1w.
     for (const tf of Object.keys(TF_CC)) {
-      try {
-        const candles = await ccOHLC(sym, tf);
-        if (candles.length) { bundle.ohlc[c.id][tf] = candles; ok++; }
-        else throw new Error('empty');
-      } catch (e) {
+      let candles = null, src = 'cc';
+      try { candles = await ccOHLC(sym, tf); }
+      catch (e1) {
+        src = 'kraken';
+        try { candles = await krakenOHLC(sym, tf); }
+        catch (e2) {
+          console.error(`  OHLC fail ${c.id} tf=${tf}: cc=${e1 && e1.message} kraken=${e2 && e2.message}`);
+        }
+      }
+      if (candles && candles.length) { bundle.ohlc[c.id][tf] = candles; ok++; if (src !== 'cc') console.log(`  ${c.id} tf=${tf} via ${src}`); }
+      else {
         const old = prev.ohlc && prev.ohlc[c.id] && prev.ohlc[c.id][tf];
         if (old) { bundle.ohlc[c.id][tf] = old; carried++; }
-        else { console.error('  OHLC fail', c.id, tf, e && e.message); fail++; }
+        else fail++;
       }
       await sleep(250);
     }
-    // Long history (weekly) from CryptoCompare to keep the bundle lean.
+    // Long history (weekly): allData → last-2000-days → previous bundle.
     try {
-      const cc = await getJSON(`${CC}/v2/histoday?fsym=${encodeURIComponent(sym)}&tsym=USD&allData=true`, { noKey: true });
-      const arr = (cc && cc.Data && cc.Data.Data) || [];
-      const weekly = arr.filter((d, i) => d && d.close > 0 && i % 7 === 0).map(d => [d.time * 1000, +d.close]);
-      if (weekly.length) bundle.history[c.id] = weekly;
-      else if (prev.history && prev.history[c.id]) { bundle.history[c.id] = prev.history[c.id]; carried++; }
+      bundle.history[c.id] = await ccHistory(sym);
     } catch (e) {
       if (prev.history && prev.history[c.id]) { bundle.history[c.id] = prev.history[c.id]; carried++; }
       else console.error('  history fail', c.id, e && e.message);
